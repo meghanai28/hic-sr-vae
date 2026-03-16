@@ -64,7 +64,7 @@ def validate(model, loader, device, loss_cfg, dw_cache):
     total, n = 0.0, 0
     for lr_px, hr_px in tqdm(loader, desc="val", leave=False):
         lr_px, hr_px = lr_px.to(device), hr_px.to(device)
-        pred, mu, logvar = model(lr_px, sample=False)
+        pred, mu, logvar = model(lr_px, sample=True)
         pred, hr_px = center_crop_to_match(pred, hr_px)
 
         H, W = pred.shape[-2:]
