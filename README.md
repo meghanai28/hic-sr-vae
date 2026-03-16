@@ -36,7 +36,7 @@ hic-sr-vae/
 
 ```
 ├── data/                       # Raw .mcool files 
-│   └── experiment.mcool
+│   └── GM12878.mcool
 │
 ├── tiles/                      # Extracted .npy tiles
 │   ├── hr/
