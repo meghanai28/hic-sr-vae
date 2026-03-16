@@ -67,10 +67,7 @@ pip install torch numpy matplotlib pyyaml tqdm cooler
 
 ```bash
 # Extract HR tiles from your .mcool
-python scripts/make_tiles.py \
-    --mcool data/GM12878.mcool \
-    --res 10000 \
-    --out tiles/hr
+python scripts/make_tiles.py --mcool data/GM12878.mcool --res 10000 --out tiles/hr
 
 # Generate LR tiles (16x coverage downsampling)
 python scripts/make_lr_tiles.py --hr-glob "tiles/hr/train/*.npy" --out tiles/lr/train
@@ -93,7 +90,5 @@ python scripts/train.py --config configs/default.yaml
 ### 5. Evaluate
 
 ```bash
-python scripts/evaluate.py \
-    --config configs/default.yaml \
-    --ckpt runs/sr_vae/sr_vae_best.pt
+python scripts/evaluate.py --config configs/default.yaml --ckpt runs/sr_vae/sr_vae_best.pt
 ```
