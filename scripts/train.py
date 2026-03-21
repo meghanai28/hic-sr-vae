@@ -5,6 +5,7 @@ import argparse
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -20,6 +21,9 @@ def kl_beta(epoch, total_epochs, warmup, beta_start, beta_end):
     t = min(1.0, max(0.0, (epoch - warmup) / max(1, total_epochs - warmup)))
     return beta_start + (beta_end - beta_start) * t
 
+
+
+
 def train_one_epoch(model, optimizer, loader, device, loss_cfg, dw_cache):
     model.train()
     rec_w, ssim_w, grad_w = loss_cfg["rec_w"], loss_cfg["ssim_w"], loss_cfg["grad_w"]
@@ -30,7 +34,7 @@ def train_one_epoch(model, optimizer, loader, device, loss_cfg, dw_cache):
 
     for lr_px, hr_px in pbar:
         lr_px, hr_px = lr_px.to(device), hr_px.to(device)
-        pred, mu, logvar = model(lr_px, sample=False)
+        pred, mu, logvar = model(lr_px, sample=True)
         pred, hr_px = center_crop_to_match(pred, hr_px)
 
         H, W = pred.shape[-2:]
@@ -47,6 +51,7 @@ def train_one_epoch(model, optimizer, loader, device, loss_cfg, dw_cache):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
+        
 
         bs = lr_px.size(0)
         total += loss.item() * bs
@@ -64,7 +69,7 @@ def validate(model, loader, device, loss_cfg, dw_cache):
     total, n = 0.0, 0
     for lr_px, hr_px in tqdm(loader, desc="val", leave=False):
         lr_px, hr_px = lr_px.to(device), hr_px.to(device)
-        pred, mu, logvar = model(lr_px, sample=True)
+        pred, mu, logvar = model(lr_px, sample=False)
         pred, hr_px = center_crop_to_match(pred, hr_px)
 
         H, W = pred.shape[-2:]
@@ -113,6 +118,7 @@ def train(cfg, resume_path=None):
     print(f"[model] z_ch={z_ch} scale={scale} base_ch={base_ch} params={params:,}")
 
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    sched = CosineAnnealingLR(opt, T_max=epochs, eta_min=1e-6)
     os.makedirs(save_dir, exist_ok=True)
 
     best_val, start_ep = float("inf"), 1
@@ -138,10 +144,12 @@ def train(cfg, resume_path=None):
                      beta=beta, dist_alpha=dist_alpha)
 
         tl = train_one_epoch(model, opt, train_ld, device, lcfg, dw_cache)
-        print(f"[train] ep{ep:03d}  beta={beta:.2e}  loss={tl:.4f}")
+        print(f"[train] ep{ep:03d}  lr={opt.param_groups[0]['lr']:.2e}  loss={tl:.4f}")
 
         vl = validate(model, val_ld, device, lcfg, dw_cache)
         print(f"[val]   ep{ep:03d}  loss={vl:.4f}")
+
+        sched.step()
 
         ckpt = dict(model=model.state_dict(), opt=opt.state_dict(),
                      epoch=ep, best_val=min(best_val, vl),

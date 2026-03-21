@@ -22,7 +22,8 @@ hic-sr-vae/
 │   ├── make_lr_tiles.py        #   Step 2: generate LR tiles via binomial thinning
 │   ├── train.py                #   Step 3: train the SR-VAE
 │   ├── evaluate.py             #   Step 4: eval with triptychs + metrics
-│   └── visualize_data.py       #   Sanity check: inspect LR/HR pairs before training
+│   ├── visualize_data.py       #   Sanity check: inspect LR/HR pairs before training
+│   └── run_pipeline.py         #   One-command: data prep → train → eval
 │
 ├── docs/                       # Documentation and notes
 │   └── architecture.md         #   Architecture design rationale
@@ -35,7 +36,7 @@ hic-sr-vae/
 
 ```
 ├── data/                       # Raw .mcool files 
-│   └── GM12878.mcool
+│   └── experiment.mcool
 │
 ├── tiles/                      # Extracted .npy tiles
 │   ├── hr/
