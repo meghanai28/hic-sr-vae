@@ -11,7 +11,7 @@ data:
 
 vae:
   z_ch: 64                  
-  base_ch: 48                
+  base_ch: 64               
   epochs: 100
   batch_size: 4
   lr: 0.0002                 
