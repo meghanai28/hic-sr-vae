@@ -13,22 +13,20 @@ vae:
   z_ch: 64                  
   base_ch: 64               
   epochs: 100
-  batch_size: 4
+  batch_size: 2
   lr: 0.0002                 
   save_dir: ./runs/sr_vae
 
 srvae:
-  scale: 1                  
+  scale: 1
+
+num_zooms: 3
 
 loss:
-  rec_w: 0.50             
-  ssim_w: 0.25               
-  grad_w: 0.25              
-
-
-  dist_alpha: 1.0           
-
-
+  rec_w: 0.50
+  ssim_w: 0.25
+  grad_w: 0.25
+  dist_alpha: 1.0
   beta_start: 0.0
-  beta_end: 0.000001        
-  kl_warmup_epochs: 60       
+  beta_end: 0.000001
+  kl_warmup_epochs: 60

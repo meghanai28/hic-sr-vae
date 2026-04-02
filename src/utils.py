@@ -2,6 +2,14 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+
+def binomial_thin(counts: np.ndarray, frac: float) -> np.ndarray:
+    arr = np.nan_to_num(counts, nan=0.0, posinf=0.0, neginf=0.0)
+    clean = np.maximum(arr, 0).astype(np.int64)
+    thinned = np.random.binomial(clean, frac)
+    return thinned.astype(np.float32)
+
+
 def _diagonal_expectations(mat: np.ndarray, eps: float = 1e-8) -> np.ndarray:
 
     assert mat.ndim == 2 and mat.shape[0] == mat.shape[1], "OE requires square matrix"
@@ -106,11 +114,12 @@ def distance_weight_map(H: int, W: int, alpha: float = 1.0, device: torch.device
     dist = (i - j).abs()
     max_dist = dist.max().clamp_min(1.0)
     weights = 1.0 + alpha * (dist / max_dist)
-    return weights.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+    return weights.unsqueeze(0).unsqueeze(0)
 
 
 def weighted_l1_loss(pred: torch.Tensor, target: torch.Tensor, weight_map: torch.Tensor) -> torch.Tensor:
     return (weight_map * (pred - target).abs()).mean()
+
 
 def center_crop_to_match(a: torch.Tensor, b: torch.Tensor):
     H = min(a.shape[-2], b.shape[-2])

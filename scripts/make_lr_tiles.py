@@ -5,11 +5,9 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-def binomial_thin(counts: np.ndarray, frac: float) -> np.ndarray:
-    clean = np.maximum(counts, 0).astype(np.int64) # non-negative
-    thinned = np.random.binomial(clean, frac) # frac is percent of reads to keep
-    return thinned.astype(np.float32)
+from utils import binomial_thin
 
 
 def main():

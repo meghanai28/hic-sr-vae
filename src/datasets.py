@@ -1,13 +1,24 @@
+import os
 import glob
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from utils import normalize
 
+ZOOM_TO_IDX = {1: 0, 2: 1, 4: 2}
+
+
 def _glob_sorted(pattern: str | None) -> list[str]:
     if not pattern:
         return []
     return sorted(glob.glob(pattern, recursive=True))
+
+
+def _zoom_idx(path: str) -> int:
+    name = os.path.splitext(os.path.basename(path))[0]
+    zoom = int(name.rsplit("_", 1)[-1])
+    return ZOOM_TO_IDX[zoom]
+
 
 class PairedHiC(Dataset):
     def __init__(self, lr_paths: list[str], hr_paths: list[str], norm: str | None = "oe", augment: bool = False):
@@ -19,32 +30,24 @@ class PairedHiC(Dataset):
         self.augment = augment
 
     def __len__(self) -> int:
-        return len(self.lr_paths)  
+        return len(self.lr_paths)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         lr = np.load(self.lr_paths[idx]).astype(np.float32)
         hr = np.load(self.hr_paths[idx]).astype(np.float32)
+        zoom_i = _zoom_idx(self.hr_paths[idx])
 
-        # Add channel dimension [H, W] -> [1, H, W]
         lr_t = normalize(torch.from_numpy(lr).unsqueeze(0), self.norm)
         hr_t = normalize(torch.from_numpy(hr).unsqueeze(0), self.norm)
 
-        # Optional augmentation where we do simultaneous flip 
         if self.augment and torch.rand(1).item() > 0.5:
             lr_t = lr_t.flip(-1).flip(-2)
             hr_t = hr_t.flip(-1).flip(-2)
 
-        return lr_t, hr_t
+        return lr_t, hr_t, torch.tensor(zoom_i, dtype=torch.long)
+
 
 class BlindHiC(Dataset):
-    """
-    Dataset of unpaired LR tiles (for inference when no HR reference exists).
-
-    Args:
-        lr_paths: list of paths to .npy tiles
-        norm: normalization mode
-    """
-
     def __init__(self, lr_paths: list[str], norm: str | None = "oe"):
         assert len(lr_paths) > 0, "No LR files found"
         self.paths = lr_paths
@@ -59,14 +62,11 @@ class BlindHiC(Dataset):
 
 
 def make_loaders(cfg: dict, verbose: bool = False):
-
-    # Extract settings
     data_cfg = cfg.get("data", {})
     norm = data_cfg.get("norm", cfg.get("norm", "oe"))
     bs = int(cfg.get("vae", {}).get("batch_size", 4))
     nw = int(cfg.get("num_workers", 0))
 
-    # Resolve file paths
     tr_lr = _glob_sorted(data_cfg.get("train_lr"))
     tr_hr = _glob_sorted(data_cfg.get("train_hr"))
     va_lr = _glob_sorted(data_cfg.get("val_lr"))
@@ -98,4 +98,3 @@ def make_loaders(cfg: dict, verbose: bool = False):
         print(f"  test:  {len(te_lr)} pairs")
 
     return train_ld, val_ld, test_ld
-   
