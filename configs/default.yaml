@@ -20,13 +20,12 @@ vae:
 srvae:
   scale: 1
 
-num_zooms: 3
+num_zooms: 6
 
 loss:
   rec_w: 0.50
   ssim_w: 0.25
   grad_w: 0.25
-  dist_alpha: 1.0
   beta_start: 0.0
   beta_end: 0.000001
   kl_warmup_epochs: 60

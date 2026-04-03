@@ -47,20 +47,33 @@ def _downsample(arr, factor):
 def reconstruct_chromosome(model, lr_raw: np.ndarray, patch: int, stride: int,
                             zooms: list[int], device: str) -> np.ndarray:
     N = lr_raw.shape[0]
-    accumulator = np.zeros((N, N), dtype=np.float32)
-    weight_map  = np.zeros((N, N), dtype=np.float32)
+    result = np.zeros((N, N), dtype=np.float32)
 
-    for zoom in zooms:
-        zoom_idx = torch.tensor([ZOOM_TO_IDX[zoom]], dtype=torch.long, device=device)
-        win      = patch * zoom
-        step     = stride * zoom
-        window   = cosine_window_2d(win)
+    # coarse to fine: each zoom covers its distance band, finer overwrites coarser
+    for zoom in sorted(zooms, reverse=True):
+        zoom_idx_t = torch.tensor([ZOOM_TO_IDX[zoom]], dtype=torch.long, device=device)
+        win  = patch * zoom
+        step = win  # non-overlapping for speed; cosine window handles blending
 
-        positions = list(range(0, N - win + 1, step))
-        print(f"[zoom={zoom}x] {len(positions)} tiles (win={win} bins, step={step} bins)")
+        band_lo = patch * (zoom // 2) if zoom > 1 else 0
+        band_hi = patch * zoom
 
-        for i in tqdm(positions, desc=f"zoom={zoom}x", leave=False):
-            raw_tile = lr_raw[i:i + win, i:i + win].copy()
+        accumulator = np.zeros((N, N), dtype=np.float32)
+        weight_map  = np.zeros((N, N), dtype=np.float32)
+        window = cosine_window_2d(win)
+
+        # tile all (i, j) in upper triangle where j-i falls in this zoom's band
+        positions = []
+        for i in range(0, N - win + 1, step):
+            for dj in range(band_lo, band_hi, win):
+                j = i + dj
+                if j + win <= N:
+                    positions.append((i, j))
+
+        print(f"[zoom={zoom}x] {len(positions)} tiles  band=[{band_lo},{band_hi}) bins  win={win}")
+
+        for (i, j) in tqdm(positions, desc=f"zoom={zoom}x", leave=False):
+            raw_tile = lr_raw[i:i + win, j:j + win].copy()
 
             if zoom > 1:
                 coarse = _downsample(raw_tile, zoom).astype(np.float32)
@@ -71,7 +84,7 @@ def reconstruct_chromosome(model, lr_raw: np.ndarray, patch: int, stride: int,
                 torch.from_numpy(coarse).unsqueeze(0).unsqueeze(0), "oe"
             ).to(device)
 
-            sr_t, _, _ = model(tile_t, zoom_idx, sample=False)
+            sr_t, _, _ = model(tile_t, zoom_idx_t, sample=False)
             sr_np = sr_t[0, 0].cpu().numpy()
 
             if zoom > 1:
@@ -87,12 +100,17 @@ def reconstruct_chromosome(model, lr_raw: np.ndarray, patch: int, stride: int,
             sr_np = sr_np[:h, :w]
             wnd   = window[:h, :w]
 
-            accumulator[i:i + h, i:i + w] += sr_np * wnd
-            weight_map [i:i + h, i:i + w] += wnd
+            accumulator[i:i + h, j:j + w] += sr_np * wnd
+            weight_map [i:i + h, j:j + w] += wnd
 
-    mask   = weight_map > 0
-    result = np.where(mask, accumulator / np.where(mask, weight_map, 1.0), 0.0).astype(np.float32)
-    result = 0.5 * (result + result.T)
+            # mirror to lower triangle
+            if i != j:
+                accumulator[j:j + w, i:i + h] += sr_np.T * wnd.T
+                weight_map [j:j + w, i:i + h] += wnd.T
+
+        mask = weight_map > 0
+        result[mask] = accumulator[mask] / weight_map[mask]
+
     return result
 
 
@@ -202,10 +220,9 @@ def main():
     N = lr_raw.shape[0]
     print(f"[data] {N}x{N} bins")
 
+    lr_oe = oe_normalize_full(lr_raw)
     sr = reconstruct_chromosome(model, lr_raw, patch=args.patch,
                                 stride=args.stride, zooms=zooms, device=device)
-
-    lr_oe = oe_normalize_full(lr_raw)
 
     hr_oe = None
     hr_mcool_path = args.hr_mcool or args.mcool

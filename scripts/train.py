@@ -3,6 +3,7 @@ import sys
 import yaml
 import argparse
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
@@ -10,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from datasets import make_loaders
 from model import SRVAE
-from utils import ssim_loss, sobel_edge_loss, weighted_l1_loss, distance_weight_map, center_crop_to_match
+from utils import ssim_loss, sobel_edge_loss, center_crop_to_match
 
 
 def kl_beta(epoch, total_epochs, warmup, beta_start, beta_end):
@@ -20,7 +21,7 @@ def kl_beta(epoch, total_epochs, warmup, beta_start, beta_end):
     return beta_start + (beta_end - beta_start) * t
 
 
-def train_one_epoch(model, optimizer, loader, device, loss_cfg, dw_map):
+def train_one_epoch(model, optimizer, loader, device, loss_cfg):
     model.train()
     rec_w, ssim_w, grad_w = loss_cfg["rec_w"], loss_cfg["ssim_w"], loss_cfg["grad_w"]
     beta = loss_cfg["beta"]
@@ -35,7 +36,7 @@ def train_one_epoch(model, optimizer, loader, device, loss_cfg, dw_map):
         pred, mu, logvar = model(lr_px, zoom_idx, sample=True)
         pred, hr_px = center_crop_to_match(pred, hr_px)
 
-        L_rec  = weighted_l1_loss(pred, hr_px, dw_map)
+        L_rec  = F.l1_loss(pred, hr_px)
         L_ssim = ssim_loss(pred, hr_px)
         L_grad = sobel_edge_loss(pred, hr_px)
         L_kl   = SRVAE.kl_divergence(mu, logvar) * beta
@@ -55,7 +56,7 @@ def train_one_epoch(model, optimizer, loader, device, loss_cfg, dw_map):
 
 
 @torch.no_grad()
-def validate(model, loader, device, loss_cfg, dw_map):
+def validate(model, loader, device, loss_cfg):
     model.eval()
     rec_w, ssim_w, grad_w = loss_cfg["rec_w"], loss_cfg["ssim_w"], loss_cfg["grad_w"]
     beta = loss_cfg["beta"]
@@ -68,7 +69,7 @@ def validate(model, loader, device, loss_cfg, dw_map):
         pred, mu, logvar = model(lr_px, zoom_idx, sample=False)
         pred, hr_px = center_crop_to_match(pred, hr_px)
 
-        L_rec  = weighted_l1_loss(pred, hr_px, dw_map)
+        L_rec  = F.l1_loss(pred, hr_px)
         L_ssim = ssim_loss(pred, hr_px)
         L_grad = sobel_edge_loss(pred, hr_px)
         L_kl   = SRVAE.kl_divergence(mu, logvar) * beta
@@ -129,17 +130,15 @@ def train(cfg, resume_path=None):
 
     best_path = os.path.join(save_dir, "sr_vae_best.pt")
     last_path = os.path.join(save_dir, "sr_vae_last.pt")
-    dist_alpha = float(loss_raw.get("dist_alpha", 1.0))
-    dw_map = distance_weight_map(256, 256, alpha=dist_alpha, device=device)
 
     for ep in range(start_ep, epochs + 1):
         beta = kl_beta(ep, epochs, warmup, beta_start, beta_end)
         lcfg = dict(rec_w=rec_w, ssim_w=ssim_w, grad_w=grad_w, beta=beta)
 
-        tl = train_one_epoch(model, opt, train_ld, device, lcfg, dw_map)
+        tl = train_one_epoch(model, opt, train_ld, device, lcfg)
         print(f"[train] ep{ep:03d}  lr={opt.param_groups[0]['lr']:.2e}  loss={tl:.4f}")
 
-        vl = validate(model, val_ld, device, lcfg, dw_map)
+        vl = validate(model, val_ld, device, lcfg)
         print(f"[val]   ep{ep:03d}  loss={vl:.4f}")
 
         sched.step()

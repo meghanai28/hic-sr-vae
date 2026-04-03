@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from utils import normalize
 
-ZOOM_TO_IDX = {1: 0, 2: 1, 4: 2}
+ZOOM_TO_IDX = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5}
 
 
 def _glob_sorted(pattern: str | None) -> list[str]:
