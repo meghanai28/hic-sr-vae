@@ -29,11 +29,10 @@ def train_one_epoch(model, optimizer, loader, device, loss_cfg):
     total, n = 0.0, 0
     pbar = tqdm(loader, desc="train", leave=False)
 
-    for lr_px, hr_px, zoom_idx in pbar:
+    for lr_px, hr_px in pbar:
         lr_px, hr_px = lr_px.to(device), hr_px.to(device)
-        zoom_idx = zoom_idx.to(device)
 
-        pred, mu, logvar = model(lr_px, zoom_idx, sample=True)
+        pred, mu, logvar = model(lr_px, sample=True)
         pred, hr_px = center_crop_to_match(pred, hr_px)
 
         L_rec  = F.l1_loss(pred, hr_px)
@@ -62,11 +61,10 @@ def validate(model, loader, device, loss_cfg):
     beta = loss_cfg["beta"]
 
     total, n = 0.0, 0
-    for lr_px, hr_px, zoom_idx in tqdm(loader, desc="val", leave=False):
+    for lr_px, hr_px in tqdm(loader, desc="val", leave=False):
         lr_px, hr_px = lr_px.to(device), hr_px.to(device)
-        zoom_idx = zoom_idx.to(device)
 
-        pred, mu, logvar = model(lr_px, zoom_idx, sample=False)
+        pred, mu, logvar = model(lr_px, sample=False)
         pred, hr_px = center_crop_to_match(pred, hr_px)
 
         L_rec  = F.l1_loss(pred, hr_px)
@@ -92,7 +90,6 @@ def train(cfg, resume_path=None):
     z_ch     = int(vae_cfg.get("z_ch", 64))
     base_ch  = int(vae_cfg.get("base_ch", 48))
     scale    = int(srvae_cfg.get("scale", 1))
-    num_zooms = int(cfg.get("num_zooms", 3))
     epochs   = int(vae_cfg.get("epochs", 100))
     lr       = float(vae_cfg.get("lr", 2e-4))
     save_dir = vae_cfg.get("save_dir", "./runs/sr_vae")
@@ -107,9 +104,9 @@ def train(cfg, resume_path=None):
     train_ld, val_ld, _ = make_loaders(cfg, verbose=True)
     assert train_ld and val_ld, "Need both train and val data"
 
-    model = SRVAE(z_ch=z_ch, scale_factor=scale, base_ch=base_ch, num_zooms=num_zooms).to(device)
+    model = SRVAE(z_ch=z_ch, scale_factor=scale, base_ch=base_ch).to(device)
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"[model] z_ch={z_ch} scale={scale} base_ch={base_ch} num_zooms={num_zooms} params={params:,}")
+    print(f"[model] z_ch={z_ch} scale={scale} base_ch={base_ch} params={params:,}")
 
     opt   = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     sched = CosineAnnealingLR(opt, T_max=epochs, eta_min=1e-6)
@@ -146,7 +143,7 @@ def train(cfg, resume_path=None):
         ckpt = dict(model=model.state_dict(), opt=opt.state_dict(),
                     epoch=ep, best_val=min(best_val, vl),
                     z_ch=z_ch, scale=scale, base_ch=base_ch,
-                    num_zooms=num_zooms, cfg=cfg)
+                    cfg=cfg)
         torch.save(ckpt, last_path)
 
         if vl < best_val:
