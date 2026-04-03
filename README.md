@@ -1,94 +1,111 @@
 # Hi-C Super-Resolution VAE
 
-Denoising and super-resolution of Hi-C contact matrices using a
-Variational Autoencoder with U-Net skip connections and SE channel attention.
+Denoising and super-resolution of Hi-C contact matrices using a Variational Autoencoder with U-Net skip connections, SE channel attention, and multi-scale diagonal tiling.
 
 ## Project Structure
 
 ```
 hic-sr-vae/
-│
-├── configs/                    # YAML configuration files
-│   └── default.yaml            #   default training config
-│
-├── src/                        # Core library (importable modules)
-│   ├── __init__.py
-│   ├── model.py                #   SR-VAE architecture (encoder, decoder, SE, VAE)
-│   ├── datasets.py             #   PyTorch Dataset/DataLoader for paired Hi-C tiles
-│   └── utils.py                #   OE normalization, losses, spatial helpers
-│
-├── scripts/                    # Runnable entry points (CLI tools)
-│   ├── make_tiles.py           #   Step 1: extract HR tiles from .mcool
-│   ├── make_lr_tiles.py        #   Step 2: generate LR tiles via binomial thinning
-│   ├── train.py                #   Step 3: train the SR-VAE
-│   ├── evaluate.py             #   Step 4: eval with triptychs + metrics
-│   ├── visualize_data.py       #   Sanity check: inspect LR/HR pairs before training
-│   └── run_pipeline.py         #   One-command: data prep → train → eval
-│
-├── docs/                       # Documentation and notes
-│   └── architecture.md         #   Architecture design rationale
-│
-├── requirements.txt
-└── README.md                   # This file
+├── configs/
+│   └── default.yaml            # training config
+├── src/
+│   ├── model.py                # SR-VAE architecture
+│   ├── datasets.py             # paired tile dataset + zoom parsing
+│   └── utils.py                # OE norm, losses, spatial helpers
+├── scripts/
+│   ├── make_tiles.py           # step 1: extract multi-scale HR tiles from .mcool
+│   ├── make_lr_tiles.py        # step 2: binomial thinning to generate LR tiles
+│   ├── train.py                # step 3: train
+│   ├── evaluate.py             # step 4: eval with triptychs + metrics
+│   └── reconstruct_chromosome.py  # full chromosome reconstruction
+├── data/                       # (gitignored) .mcool files
+├── tiles/                      # (gitignored) extracted .npy tiles
+│   ├── hr/{train,val,test}/
+│   └── lr/{train,val,test}/
+└── runs/sr_vae/                # (gitignored) checkpoints + eval output
+    ├── sr_vae_best.pt
+    ├── sr_vae_last.pt
+    └── eval/
 ```
 
-### Directories created at runtime (gitignored)
+## Approach
 
-```
-├── data/                       # Raw .mcool files 
-│   └── experiment.mcool
-│
-├── tiles/                      # Extracted .npy tiles
-│   ├── hr/
-│   │   ├── train/              #   HR tiles for chr1-16
-│   │   ├── val/                #   HR tiles for chr17-18
-│   │   └── test/               #   HR tiles for chr19-22
-│   └── lr/
-│       ├── train/              #   LR tiles
-│       ├── val/
-│       └── test/
-│
-└── runs/                       # Training outputs
-    └── sr_vae/
-        ├── sr_vae_best.pt      #   Best checkpoint (by val loss)
-        ├── sr_vae_last.pt      #   Latest checkpoint (for resume)
-        └── eval/               #   Triptych PNGs + metrics
-```
+Tiles are extracted **on the diagonal only** at three zoom levels (1×/2×/4×), each downsampled to 256×256 pixels. This covers 2.56 Mb, 5.12 Mb, and 10.24 Mb windows respectively. A zoom embedding conditions the model on scale, so one model handles all three. LR tiles are simulated via binomial thinning at 1/16 read fraction. The reconstruction pass runs all three zoom levels and accumulates into a full-chromosome matrix using cosine windowed overlap-add.
 
-## Pipeline Information
+**Splits:** train=chr1-16, val=chr17-18, test=chr19-22
 
-### 1. Install dependencies
+## Setup
 
 ```bash
 pip install torch numpy matplotlib pyyaml tqdm cooler
 ```
 
-### 2. Prepare data
+## Pipeline
+
+### 1. Extract HR tiles
 
 ```bash
-# Extract HR tiles from your .mcool
-python scripts/make_tiles.py --mcool data/GM12878.mcool --res 10000 --out tiles/hr
-
-# Generate LR tiles (16x coverage downsampling)
-python scripts/make_lr_tiles.py --hr-glob "tiles/hr/train/*.npy" --out tiles/lr/train
-python scripts/make_lr_tiles.py --hr-glob "tiles/hr/val/*.npy"   --out tiles/lr/val
-python scripts/make_lr_tiles.py --hr-glob "tiles/hr/test/*.npy"  --out tiles/lr/test
+python scripts/make_tiles.py \
+    --mcool data/GM12878.mcool \
+    --res 10000 \
+    --out tiles/hr \
+    --patch 256 \
+    --zooms 1,2,4
 ```
 
-### 3. Sanity check your data
+### 2. Generate LR tiles
 
 ```bash
-python scripts/visualize_data.py --config configs/default.yaml --n 6
+python scripts/make_lr_tiles.py --hr-glob "tiles/hr/train/*.npy" --out tiles/lr/train --frac 0.0625
+python scripts/make_lr_tiles.py --hr-glob "tiles/hr/val/*.npy"   --out tiles/lr/val   --frac 0.0625
+python scripts/make_lr_tiles.py --hr-glob "tiles/hr/test/*.npy"  --out tiles/lr/test  --frac 0.0625
 ```
 
-### 4. Train
+### 3. Train
 
 ```bash
 python scripts/train.py --config configs/default.yaml
+
+# Resume from checkpoint
+python scripts/train.py --config configs/default.yaml --resume runs/sr_vae/sr_vae_last.pt
 ```
 
-### 5. Evaluate
+### 4. Evaluate
 
 ```bash
 python scripts/evaluate.py --config configs/default.yaml --ckpt runs/sr_vae/sr_vae_best.pt
 ```
+
+Outputs triptych PNGs (LR / SR-VAE / HR) to `runs/sr_vae/eval/` with zoom level and window size labeled on each figure.
+
+### 5. Reconstruct chromosome
+
+```bash
+python scripts/reconstruct_chromosome.py \
+    --mcool data/GM12878.mcool \
+    --lr-res 10000 \
+    --chrom chr17 \
+    --ckpt runs/sr_vae/sr_vae_best.pt \
+    --config configs/default.yaml \
+    --zooms 1,2,4 \
+    --stride 64 \
+    --save-npy
+```
+
+## Config
+
+Key fields in `configs/default.yaml`:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `vae.z_ch` | 64 | Latent channel dim |
+| `vae.base_ch` | 64 | Base feature channels |
+| `vae.epochs` | 100 | Training epochs |
+| `vae.lr` | 2e-4 | Learning rate |
+| `vae.batch_size` | 2 | Batch size |
+| `num_zooms` | 3 | Number of zoom levels (1×/2×/4×) |
+| `loss.rec_w` | 0.50 | L1 loss weight |
+| `loss.ssim_w` | 0.25 | SSIM loss weight |
+| `loss.grad_w` | 0.25 | Sobel gradient loss weight |
+| `loss.dist_alpha` | 1.0 | Distance weight map strength |
+| `loss.kl_warmup_epochs` | 60 | Epochs before KL term ramps in |

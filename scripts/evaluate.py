@@ -10,9 +10,11 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from datasets import make_loaders
+from datasets import make_loaders, ZOOM_TO_IDX
 from model import SRVAE
 from utils import center_crop_to_match
+
+IDX_TO_ZOOM = {v: k for k, v in ZOOM_TO_IDX.items()}
 
 
 def mse_np(a, b):
@@ -83,6 +85,7 @@ def main():
         pred, _, _ = model(lr_b, zoom_idx_b, sample=False)
 
         for b in range(lr_b.size(0)):
+            zoom = IDX_TO_ZOOM.get(int(zoom_idx_b[b].item()), "?")
             lr_np = lr_b[b, 0].cpu().numpy()
             sr_np = pred[b, 0].cpu().numpy()
             hr_np = hr_b[b, 0].cpu().numpy()
@@ -112,7 +115,7 @@ def main():
                 ax.set_yticks([])
                 ax.set_title(title, fontsize=9)
                 fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            fig.suptitle(f"MSE={m:.4f}  SSIM={s:.3f}", fontsize=10)
+            fig.suptitle(f"zoom={zoom}x ({zoom*256*10//1000}kb window)  MSE={m:.4f}  SSIM={s:.3f}", fontsize=10)
             fig.savefig(os.path.join(args.outdir, f"triptych_{count:04d}.png"), dpi=args.dpi)
             plt.close(fig)
             count += 1
