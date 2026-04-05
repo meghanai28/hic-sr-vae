@@ -48,7 +48,7 @@ class UpsampleBlock(nn.Module):
 
 
 class SRVAE(nn.Module):
-    def __init__(self, z_ch: int = 64, scale_factor: int = 1, base_ch: int = 48):
+    def __init__(self, z_ch: int = 64, scale_factor: int = 1, base_ch: int = 48, num_zooms: int = 6):
         super().__init__()
         self.z_ch = z_ch
         self.scale = scale_factor
@@ -66,6 +66,8 @@ class SRVAE(nn.Module):
 
         self.to_mu     = nn.Conv2d(c3, z_ch, 3, 1, 1)
         self.to_logvar = nn.Conv2d(c3, z_ch, 3, 1, 1)
+
+        self.zoom_emb = nn.Embedding(num_zooms, z_ch)
 
         self.dec_in = nn.Sequential(
             nn.Conv2d(z_ch, c3, 3, 1, 1), nn.GELU(),
@@ -117,9 +119,12 @@ class SRVAE(nn.Module):
         h = self.fuse0(h)
         return self.head(h)
 
-    def forward(self, x: torch.Tensor, sample: bool = False) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, zoom_idx: torch.Tensor, sample: bool = False) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         mu, logvar, skip0, skip1 = self.encode(x)
         z = self.reparameterize(mu, logvar) if sample else mu
+
+        emb = self.zoom_emb(zoom_idx.to(x.device)).view(-1, self.z_ch, 1, 1)
+        z = z + emb
 
         residual = self.decode(z, skip0, skip1)
 

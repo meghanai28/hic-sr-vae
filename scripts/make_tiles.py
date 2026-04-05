@@ -7,32 +7,26 @@ try:
 except ImportError:
     raise ImportError("Install cooler: pip install cooler")
 
-from tqdm import tqdm
+BANDS = [
+    {"band": (0, 256),     "zoom": 1,  "stride": 64},
+    {"band": (256, 512),   "zoom": 1,  "stride": 128},
+    {"band": (512, 1024),  "zoom": 2,  "stride": 512},
+    {"band": (1024, 2048), "zoom": 4,  "stride": 1024},
+    {"band": (2048, 4096), "zoom": 8,  "stride": 2048},
+    {"band": (4096, 8192), "zoom": 16, "stride": 4096},
+]
+
+ZOOM_TO_IDX = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}
 
 
-def _get_tile(mat, chrom, starts, ends, i, j, patch):
-    si = int(starts[i])
-    ei = int(ends[i + patch - 1])
-    sj = int(starts[j])
-    ej = int(ends[j + patch - 1])
-    M = np.asarray(mat.fetch((chrom, si, ei), (chrom, sj, ej)), dtype=np.float32)
-    if i == j:
-        M = 0.5 * (M + M.T)
-    return M
+def _downsample(mat, factor):
+    h, w = mat.shape
+    h2 = (h // factor) * factor
+    w2 = (w // factor) * factor
+    return mat[:h2, :w2].reshape(h2 // factor, factor, w2 // factor, factor).mean(axis=(1, 3))
 
 
-def _positions(N, patch, stride):
-    i_vals = sorted(set(range(0, N - patch + 1, stride)) | {max(0, N - patch)})
-    positions = []
-    for i in i_vals:
-        j_hi = N - patch + 1
-        j_vals = sorted(set(range(i, j_hi, stride)) | {max(i, j_hi - 1)} if j_hi > i else set())
-        for j in j_vals:
-            positions.append((i, j))
-    return positions
-
-
-def extract_split(c, chrom_list, patch, stride, out_base, split):
+def extract_split(c, chrom_list, patch, out_base, split):
     out_dir = os.path.join(out_base, split)
     os.makedirs(out_dir, exist_ok=True)
     mat = c.matrix(balance=False)
@@ -41,20 +35,48 @@ def extract_split(c, chrom_list, patch, stride, out_base, split):
     for chrom in chrom_list:
         if chrom not in c.chromnames:
             continue
-        bins_df = c.bins().fetch(chrom)
-        starts = bins_df["start"].to_numpy()
-        ends = bins_df["end"].to_numpy()
-        n_bins = len(starts)
+        raw = mat.fetch(chrom).astype(np.float32)
+        raw = 0.5 * (raw + raw.T)
+        N = raw.shape[0]
 
-        if n_bins < patch:
-            print(f"[skip] {chrom}: {n_bins} bins < patch {patch}")
+        if N < patch:
+            print(f"[skip] {chrom}: {N} bins < patch {patch}")
             continue
 
-        positions = _positions(n_bins, patch, stride)
-        for i, j in tqdm(positions, desc=f"{split}/{chrom}", leave=False):
-            M = _get_tile(mat, chrom, starts, ends, i, j, patch)
-            np.save(os.path.join(out_dir, f"{chrom}_{i}_{j}.npy"), M)
-            count += 1
+        for band_cfg in BANDS:
+            blo, bhi = band_cfg["band"]
+            zoom = band_cfg["zoom"]
+            stride = band_cfg["stride"]
+            win = patch * zoom
+
+            if blo >= N:
+                continue
+
+            skipped = 0
+            for i in range(0, N, stride):
+                for dj in range(blo, min(bhi, N), stride):
+                    j = i + dj
+                    if j >= N:
+                        break
+
+                    ih = min(win, N - i)
+                    jw = min(win, N - j)
+                    tile = np.zeros((win, win), dtype=np.float32)
+                    tile[:ih, :jw] = raw[i:i + ih, j:j + jw]
+
+                    if zoom > 1:
+                        tile = _downsample(tile, zoom)
+
+                    nonzero_frac = np.count_nonzero(tile) / tile.size
+                    if nonzero_frac < 0.01:
+                        skipped += 1
+                        continue
+
+                    np.save(os.path.join(out_dir, f"{chrom}_{i}_{j}_{zoom}.npy"), tile)
+                    count += 1
+
+            if skipped:
+                print(f"  [{chrom}/band{blo}-{bhi}/z{zoom}] skipped {skipped} near-empty")
 
     return count
 
@@ -65,7 +87,6 @@ def main():
     ap.add_argument("--res",    type=int, required=True)
     ap.add_argument("--out",    required=True)
     ap.add_argument("--patch",  type=int, default=256)
-    ap.add_argument("--stride", type=int, default=128)
     args = ap.parse_args()
 
     c = cooler.Cooler(f"{args.mcool}::/resolutions/{args.res}")
@@ -85,7 +106,7 @@ def main():
 
     total = 0
     for split, chrom_list in splits.items():
-        n = extract_split(c, chrom_list, args.patch, args.stride, args.out, split)
+        n = extract_split(c, chrom_list, args.patch, args.out, split)
         print(f"[{split}] {n} tiles")
         total += n
 

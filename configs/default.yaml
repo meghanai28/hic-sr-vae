@@ -20,6 +20,8 @@ vae:
 srvae:
   scale: 1
 
+num_zooms: 5
+
 loss:
   rec_w: 0.50
   ssim_w: 0.25

@@ -5,11 +5,19 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from utils import normalize
 
+ZOOM_TO_IDX = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}
+
 
 def _glob_sorted(pattern: str | None) -> list[str]:
     if not pattern:
         return []
     return sorted(glob.glob(pattern, recursive=True))
+
+
+def _zoom_idx(path: str) -> int:
+    name = os.path.splitext(os.path.basename(path))[0]
+    zoom = int(name.rsplit("_", 1)[-1])
+    return ZOOM_TO_IDX[zoom]
 
 
 class PairedHiC(Dataset):
@@ -24,9 +32,10 @@ class PairedHiC(Dataset):
     def __len__(self) -> int:
         return len(self.lr_paths)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         lr = np.load(self.lr_paths[idx]).astype(np.float32)
         hr = np.load(self.hr_paths[idx]).astype(np.float32)
+        zoom_i = _zoom_idx(self.hr_paths[idx])
 
         lr_t = normalize(torch.from_numpy(lr).unsqueeze(0), self.norm)
         hr_t = normalize(torch.from_numpy(hr).unsqueeze(0), self.norm)
@@ -35,7 +44,7 @@ class PairedHiC(Dataset):
             lr_t = lr_t.flip(-1).flip(-2)
             hr_t = hr_t.flip(-1).flip(-2)
 
-        return lr_t, hr_t
+        return lr_t, hr_t, torch.tensor(zoom_i, dtype=torch.long)
 
 
 class BlindHiC(Dataset):

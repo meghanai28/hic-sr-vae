@@ -10,9 +10,11 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from datasets import make_loaders
+from datasets import make_loaders, ZOOM_TO_IDX
 from model import SRVAE
 from utils import center_crop_to_match
+
+IDX_TO_ZOOM = {v: k for k, v in ZOOM_TO_IDX.items()}
 
 
 def mse_np(a, b):
@@ -65,22 +67,25 @@ def main():
     assert loader, "No val or test data"
 
     ck = torch.load(args.ckpt, map_location="cpu")
-    z_ch    = int(ck.get("z_ch",    cfg.get("vae", {}).get("z_ch", 64)))
-    scale   = int(ck.get("scale",   cfg.get("srvae", {}).get("scale", 1)))
-    base_ch = int(ck.get("base_ch", cfg.get("vae", {}).get("base_ch", 64)))
+    z_ch      = int(ck.get("z_ch",      cfg.get("vae", {}).get("z_ch", 64)))
+    scale     = int(ck.get("scale",     cfg.get("srvae", {}).get("scale", 1)))
+    base_ch   = int(ck.get("base_ch",   cfg.get("vae", {}).get("base_ch", 64)))
+    num_zooms = int(ck.get("num_zooms", cfg.get("num_zooms", 6)))
 
-    model = SRVAE(z_ch=z_ch, scale_factor=scale, base_ch=base_ch).to(device).eval()
+    model = SRVAE(z_ch=z_ch, scale_factor=scale, base_ch=base_ch, num_zooms=num_zooms).to(device).eval()
     model.load_state_dict(ck["model"], strict=False)
     print(f"[eval] loaded {args.ckpt} (epoch {ck.get('epoch', '?')})")
 
     metrics = []
     count = 0
 
-    for lr_b, hr_b in tqdm(loader, desc="eval"):
+    for lr_b, hr_b, zoom_idx_b in tqdm(loader, desc="eval"):
         lr_b, hr_b = lr_b.to(device), hr_b.to(device)
-        pred, _, _ = model(lr_b, sample=False)
+        zoom_idx_b = zoom_idx_b.to(device)
+        pred, _, _ = model(lr_b, zoom_idx_b, sample=False)
 
         for b in range(lr_b.size(0)):
+            zoom = IDX_TO_ZOOM.get(int(zoom_idx_b[b].item()), "?")
             lr_np = lr_b[b, 0].cpu().numpy()
             sr_np = pred[b, 0].cpu().numpy()
             hr_np = hr_b[b, 0].cpu().numpy()
@@ -96,7 +101,7 @@ def main():
 
             m = mse_np(sr_c, hr_c)
             s = ssim_np(sr_c, hr_c)
-            metrics.append(dict(mse=m, ssim=s))
+            metrics.append(dict(mse=m, ssim=s, zoom=zoom))
 
             pos_panels = [np.clip(lr_c, 0, None), np.clip(sr_c, 0, None), np.clip(hr_c, 0, None)]
             titles = ["LR (input)", "SR-VAE (predicted)", "HR (ground truth)"]
@@ -110,7 +115,7 @@ def main():
                 ax.set_yticks([])
                 ax.set_title(title, fontsize=9)
                 fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            fig.suptitle(f"MSE={m:.4f}  SSIM={s:.3f}", fontsize=10)
+            fig.suptitle(f"zoom={zoom}x  MSE={m:.4f}  SSIM={s:.3f}", fontsize=10)
             fig.savefig(os.path.join(args.outdir, f"triptych_{count:04d}.png"), dpi=args.dpi)
             plt.close(fig)
             count += 1
