@@ -298,9 +298,22 @@ def main():
     sr_oe = sr
     hr_oe = oe_normalize_full(hr_raw)
 
+    from scipy.ndimage import uniform_filter, gaussian_filter
+    gauss_raw = gaussian_filter(lr_raw.astype(np.float64), sigma=2.0).astype(np.float32)
+    gauss_oe = oe_normalize_full(gauss_raw)
+
+    T = _row_normalize(lr_raw.astype(np.float64))
+    diffused_raw = (T @ T @ lr_raw.astype(np.float64)).astype(np.float32)
+    diffused_raw = 0.5 * (diffused_raw + diffused_raw.T)
+    diffused_oe = oe_normalize_full(diffused_raw)
+
+    print("[baselines] Gaussian smooth + graph diffusion computed")
+
     plot_panels(
-        [np.clip(lr_oe, 0, None), np.clip(sr_oe, 0, None), np.clip(hr_oe, 0, None)],
-        [f"LR (1/16 thinned)", "SR-VAE", "HR (ground truth)"],
+        [np.clip(lr_oe, 0, None), np.clip(gauss_oe, 0, None),
+         np.clip(diffused_oe, 0, None), np.clip(sr_oe, 0, None),
+         np.clip(hr_oe, 0, None)],
+        ["LR (1/16)", "Gaussian", "Diffusion", "SR-VAE", "HR (truth)"],
         suptitle=f"{args.chrom} @ {args.res // 1000}kb — OE normalized",
         outpath=os.path.join(args.outdir, f"{args.chrom}_oe.png"),
     )
@@ -308,32 +321,35 @@ def main():
     plot_panels(
         [np.log1p(lr_raw), np.log1p(hr_raw)],
         ["LR (1/16 thinned)", "HR (ground truth)"],
-        suptitle=f"{args.chrom} @ {args.res // 1000}kb — log1p raw counts (depth comparison)",
+        suptitle=f"{args.chrom} @ {args.res // 1000}kb — log1p raw counts",
         outpath=os.path.join(args.outdir, f"{args.chrom}_raw.png"),
     )
 
-    mse_val = float(np.mean((sr_oe - hr_oe) ** 2))
-    ssim_val = ssim_full(sr_oe, hr_oe)
-    scc_sr = hicrep_scc(sr_oe, hr_oe)
-    scc_lr = hicrep_scc(lr_oe, hr_oe)
-    disco_sr = genomedisco(sr_oe, hr_oe)
-    disco_lr = genomedisco(lr_oe, hr_oe)
+    methods = {
+        "LR (raw)":       lr_oe,
+        "Gaussian":       gauss_oe,
+        "Diffusion":      diffused_oe,
+        "SR-VAE":         sr_oe,
+    }
 
-    print(f"\n[metrics] SR-VAE vs HR:")
-    print(f"  MSE:          {mse_val:.4f}")
-    print(f"  SSIM:         {ssim_val:.3f}")
-    print(f"  HiCRep SCC:   {scc_sr:.3f}")
-    print(f"  GenomeDISCO:  {disco_sr:.3f}")
-    print(f"\n[metrics] LR vs HR (baseline):")
-    print(f"  HiCRep SCC:   {scc_lr:.3f}")
-    print(f"  GenomeDISCO:  {disco_lr:.3f}")
+    print(f"\n{'Method':<16} {'MSE':>8} {'SSIM':>8} {'HiCRep':>8} {'DISCO':>8}")
+    print("-" * 52)
+    dist_mse_all = {}
+    for name, pred in methods.items():
+        m = float(np.mean((pred - hr_oe) ** 2))
+        s = ssim_full(pred, hr_oe)
+        scc_v = hicrep_scc(pred, hr_oe)
+        disco_v = genomedisco(pred, hr_oe)
+        print(f"{name:<16} {m:>8.4f} {s:>8.3f} {scc_v:>8.3f} {disco_v:>8.3f}")
+        dist_mse_all[name] = per_distance_mse(pred, hr_oe, max_dist=100)
 
-    dist_mse = per_distance_mse(sr_oe, hr_oe, max_dist=100)
     fig, ax = plt.subplots(figsize=(8, 3.5), constrained_layout=True)
-    ax.plot(dist_mse, linewidth=1.2)
+    for name, vals in dist_mse_all.items():
+        ax.plot(vals, linewidth=1.2, label=name)
     ax.set_xlabel("Genomic distance (bins)")
     ax.set_ylabel("MSE")
-    ax.set_title(f"{args.chrom} — per-distance MSE (SR-VAE vs HR)")
+    ax.set_title(f"{args.chrom} — per-distance MSE vs HR")
+    ax.legend(fontsize=8)
     fig.savefig(os.path.join(args.outdir, f"{args.chrom}_distance_mse.png"), dpi=150)
     plt.close(fig)
     print(f"[saved] {args.chrom}_distance_mse.png")
