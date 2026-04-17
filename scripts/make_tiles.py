@@ -1,32 +1,42 @@
-import os
+"""Extract HR Hi-C tiles + per-chromosome log1p-max stats.
+
+Tiles are stored as raw counts (no normalization). The accompanying
+`stats.json` holds `log1p(max(chrom))` for each chromosome, which the
+DataLoader uses to map both LR and HR into [0, 1] with a *single, shared*
+per-chromosome scale.
+
+Tile filename:  {chrom}_{i}_{j}.npy   where (i, j) are HR-bin coordinates.
+Coverage:       diagonal band, stride S, off-diagonal offset up to OFFSET.
+"""
+
 import argparse
+import json
+import os
+import sys
+
 import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 try:
     import cooler
-except ImportError:
-    raise ImportError("Install cooler: pip install cooler")
-
-BANDS = [
-    {"band": (0, 256),     "zoom": 1,  "stride": 64},
-    {"band": (256, 512),   "zoom": 1,  "stride": 128},
-    {"band": (512, 1024),  "zoom": 2,  "stride": 512},
-    {"band": (1024, 2048), "zoom": 4,  "stride": 1024},
-    {"band": (2048, 4096), "zoom": 8,  "stride": 2048},
-    {"band": (4096, 8192), "zoom": 16, "stride": 4096},
-]
-
-ZOOM_TO_IDX = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}
+except ImportError as exc:
+    raise SystemExit("Install cooler: pip install cooler") from exc
 
 
-def _downsample(mat, factor):
-    h, w = mat.shape
-    h2 = (h // factor) * factor
-    w2 = (w // factor) * factor
-    return mat[:h2, :w2].reshape(h2 // factor, factor, w2 // factor, factor).mean(axis=(1, 3))
+TRAIN_CHROMS = list(range(1, 17))
+VAL_CHROMS   = [17, 18]
+TEST_CHROMS  = [19, 20, 21, 22]
 
 
-def extract_split(c, chrom_list, patch, out_base, split):
+def normalize_chrom_name(chrom: str, has_chr_prefix: bool) -> str:
+    chrom = str(chrom)
+    if has_chr_prefix:
+        return chrom if chrom.startswith("chr") else f"chr{chrom}"
+    return chrom.replace("chr", "")
+
+
+def extract_split(c, chrom_list, patch, stride, offset_max, out_base, split, stats):
     out_dir = os.path.join(out_base, split)
     os.makedirs(out_dir, exist_ok=True)
     mat = c.matrix(balance=False)
@@ -35,7 +45,10 @@ def extract_split(c, chrom_list, patch, out_base, split):
     for chrom in chrom_list:
         if chrom not in c.chromnames:
             continue
+
         raw = mat.fetch(chrom).astype(np.float32)
+        raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
+        raw = np.maximum(raw, 0.0)
         raw = 0.5 * (raw + raw.T)
         N = raw.shape[0]
 
@@ -43,74 +56,67 @@ def extract_split(c, chrom_list, patch, out_base, split):
             print(f"[skip] {chrom}: {N} bins < patch {patch}")
             continue
 
-        for band_cfg in BANDS:
-            blo, bhi = band_cfg["band"]
-            zoom = band_cfg["zoom"]
-            stride = band_cfg["stride"]
-            win = patch * zoom
+        chrom_max = float(raw.max())
+        stats[chrom] = float(np.log1p(chrom_max))
 
-            if blo >= N:
-                continue
-
-            skipped = 0
-            for i in range(0, N, stride):
-                for dj in range(blo, min(bhi, N), stride):
-                    j = i + dj
-                    if j >= N:
-                        break
-
-                    ih = min(win, N - i)
-                    jw = min(win, N - j)
-                    tile = np.zeros((win, win), dtype=np.float32)
-                    tile[:ih, :jw] = raw[i:i + ih, j:j + jw]
-
-                    if zoom > 1:
-                        tile = _downsample(tile, zoom)
-
-                    nonzero_frac = np.count_nonzero(tile) / tile.size
-                    if nonzero_frac < 0.01:
-                        skipped += 1
-                        continue
-
-                    np.save(os.path.join(out_dir, f"{chrom}_{i}_{j}_{zoom}.npy"), tile)
-                    count += 1
-
-            if skipped:
-                print(f"  [{chrom}/band{blo}-{bhi}/z{zoom}] skipped {skipped} near-empty")
+        kept = 0
+        skipped_empty = 0
+        for i in range(0, N - patch + 1, stride):
+            for dj in range(0, offset_max + 1, stride):
+                j = i + dj
+                if j + patch > N:
+                    break
+                tile = raw[i:i + patch, j:j + patch]
+                if np.count_nonzero(tile) / tile.size < 0.01:
+                    skipped_empty += 1
+                    continue
+                np.save(os.path.join(out_dir, f"{chrom}_{i}_{j}.npy"), tile.astype(np.float32))
+                kept += 1
+        count += kept
+        print(f"  [{chrom}] kept={kept} skipped_empty={skipped_empty} log1p_max={stats[chrom]:.3f}")
 
     return count
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mcool",  required=True)
-    ap.add_argument("--res",    type=int, required=True)
-    ap.add_argument("--out",    required=True)
-    ap.add_argument("--patch",  type=int, default=256)
+    ap.add_argument("--mcool", required=True)
+    ap.add_argument("--res", type=int, required=True)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--patch", type=int, default=256)
+    ap.add_argument("--stride", type=int, default=64)
+    ap.add_argument("--offset-max", type=int, default=256,
+                    help="Max off-diagonal offset (in HR bins) for tile origin j relative to i.")
+    ap.add_argument("--splits", nargs="*", choices=["train", "val", "test"], default=None)
     args = ap.parse_args()
 
     c = cooler.Cooler(f"{args.mcool}::/resolutions/{args.res}")
-    all_chroms = list(c.chromnames)
-    has_chr = all_chroms[0].startswith("chr")
-    def fix(n): return n if has_chr else n.replace("chr", "")
-
-    train_chroms = [fix(f"chr{i}") for i in range(1, 17)]
-    val_chroms   = [fix(f"chr{i}") for i in [17, 18]]
-    test_chroms  = [fix(f"chr{i}") for i in [19, 20, 21, 22]]
-
+    has_chr = c.chromnames[0].startswith("chr")
     splits = {
-        "train": [ch for ch in train_chroms if ch in all_chroms],
-        "val":   [ch for ch in val_chroms   if ch in all_chroms],
-        "test":  [ch for ch in test_chroms  if ch in all_chroms],
+        "train": [normalize_chrom_name(f"chr{i}", has_chr) for i in TRAIN_CHROMS],
+        "val":   [normalize_chrom_name(f"chr{i}", has_chr) for i in VAL_CHROMS],
+        "test":  [normalize_chrom_name(f"chr{i}", has_chr) for i in TEST_CHROMS],
     }
+    splits = {k: [ch for ch in v if ch in c.chromnames] for k, v in splits.items()}
+    if args.splits:
+        splits = {k: splits[k] for k in args.splits}
 
+    print(f"[cfg] patch={args.patch} stride={args.stride} offset_max={args.offset_max}")
+    stats: dict[str, float] = {}
     total = 0
     for split, chrom_list in splits.items():
-        n = extract_split(c, chrom_list, args.patch, args.out, split)
+        n = extract_split(
+            c, chrom_list, args.patch, args.stride, args.offset_max,
+            out_base=args.out, split=split, stats=stats,
+        )
         print(f"[{split}] {n} tiles")
         total += n
 
+    stats_path = os.path.join(args.out, "stats.json")
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(stats, f, indent=2, sort_keys=True)
     print(f"[done] {total} tiles -> {args.out}")
+    print(f"[done] stats   -> {stats_path}")
 
 
 if __name__ == "__main__":

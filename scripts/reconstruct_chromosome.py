@@ -1,364 +1,270 @@
+"""Tile-mosaic reconstruction of a held-out chromosome.
+
+LR tiles (size H) -> SR predictions at HR resolution (size sH), stitched on a
+chromosome-scale canvas with a 2D Hann blend window. Bicubic / Gaussian use the
+same LR tiles upsampled to HR resolution. HiCPlus is included if a checkpoint
+is given.
+"""
+
+import argparse
+import csv
+import glob
 import os
 import sys
-import argparse
-import yaml
+
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
-from tqdm import tqdm
+import yaml
+from scipy.ndimage import gaussian_filter, zoom as ndi_zoom
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from model import SRVAE
-from utils import normalize, binomial_thin
-from datasets import ZOOM_TO_IDX
-
-BANDS = [
-    {"band": (0, 256),     "zoom": 1,  "stride": 64},
-    {"band": (256, 512),   "zoom": 1,  "stride": 128},
-    {"band": (512, 1024),  "zoom": 2,  "stride": 512},
-    {"band": (1024, 2048), "zoom": 4,  "stride": 1024},
-    {"band": (2048, 4096), "zoom": 8,  "stride": 2048},
-    {"band": (4096, 8192), "zoom": 16, "stride": 4096},
-]
+from datasets import load_chrom_stats, parse_tile_name
+from metrics import genomedisco_score, hicspector_score
+from model import build_model
+from repro import set_global_seed, write_run_artifacts
+from utils import log1p_normalize
 
 
-def cosine_window_2d(size: int) -> np.ndarray:
-    t = np.linspace(0, np.pi, size, dtype=np.float32)
-    w1d = (1.0 - np.cos(t)) / 2.0
-    return np.outer(w1d, w1d)
+def hann1d(n: int) -> np.ndarray:
+    if n <= 1:
+        return np.ones(max(n, 0), dtype=np.float32)
+    k = np.arange(n, dtype=np.float32)
+    return (0.5 * (1.0 - np.cos(2.0 * np.pi * k / float(n - 1)))).astype(np.float32)
 
 
-def _downsample(mat, factor):
-    h, w = mat.shape
-    h2 = (h // factor) * factor
-    w2 = (w // factor) * factor
-    return mat[:h2, :w2].reshape(h2 // factor, factor, w2 // factor, factor).mean(axis=(1, 3))
+def blend_window_2d(h: int, w: int) -> np.ndarray:
+    return np.outer(hann1d(h), hann1d(w)).astype(np.float32)
 
 
-def oe_normalize_full(mat: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    N = mat.shape[0]
-    oe = np.zeros_like(mat, dtype=np.float32)
-    for d in range(N):
-        diag = np.diag(mat, k=d)
-        if diag.size == 0:
+def bicubic_upsample(arr_np, out_shape):
+    src = torch.from_numpy(arr_np).float().unsqueeze(0).unsqueeze(0)
+    up = F.interpolate(src, size=out_shape, mode="bicubic", align_corners=False)
+    return up[0, 0].clamp(0.0, 1.0).numpy()
+
+
+def mse_np(a, b):
+    return float(np.mean((a.astype(np.float64) - b.astype(np.float64)) ** 2))
+
+
+def masked_ssim(x, y, mask, k=11, data_range=1.0):
+    C1 = (0.01 * data_range) ** 2
+    C2 = (0.03 * data_range) ** 2
+    x, y = x.astype(np.float32), y.astype(np.float32)
+    mask = mask.astype(bool)
+    if not mask.any():
+        return float("nan")
+
+    def box_mean(img, ksz):
+        if ksz <= 1:
+            return img.copy()
+        pad = ksz // 2
+        a = np.pad(img, pad, mode="edge")
+        ii = np.cumsum(np.cumsum(a, 0), 1)
+        return (ii[ksz:, ksz:] - ii[:-ksz, ksz:] - ii[ksz:, :-ksz] + ii[:-ksz, :-ksz]) / (ksz * ksz)
+
+    mu_x, mu_y = box_mean(x, k), box_mean(y, k)
+    sig_x2 = box_mean(x * x, k) - mu_x ** 2
+    sig_y2 = box_mean(y * y, k) - mu_y ** 2
+    sig_xy = box_mean(x * y, k) - mu_x * mu_y
+    num = (2 * mu_x * mu_y + C1) * (2 * sig_xy + C2)
+    den = (mu_x ** 2 + mu_y ** 2 + C1) * (sig_x2 + sig_y2 + C2)
+    sm = np.clip(num / (den + 1e-12), -1, 1)
+    h = min(sm.shape[0], mask.shape[0])
+    w = min(sm.shape[1], mask.shape[1])
+    return float(np.mean(sm[:h, :w][mask[:h, :w]]))
+
+
+def collect_pairs(cfg, split, chrom):
+    data = cfg.get("data", {})
+    lr_glob = data.get(f"{split}_lr") or f"tiles/lr/{split}/*.npy"
+    hr_glob = data.get(f"{split}_hr") or f"tiles/hr/{split}/*.npy"
+    lrs = sorted(glob.glob(lr_glob, recursive=True))
+    hrs = {os.path.basename(p): p for p in sorted(glob.glob(hr_glob, recursive=True))}
+    out = []
+    for lr_path in lrs:
+        name = os.path.basename(lr_path)
+        if name not in hrs:
             continue
-        expected = max(float(np.mean(diag)), eps)
-        idx = np.arange(N - d)
-        oe[idx, idx + d] = mat[idx, idx + d] / expected - 1.0
-        if d > 0:
-            oe[idx + d, idx] = mat[idx + d, idx] / expected - 1.0
-    return np.clip(oe, -2.0, 2.0)
+        ch, i, j = parse_tile_name(name)
+        if ch != chrom:
+            continue
+        out.append((i, j, lr_path, hrs[name]))
+    return out
 
 
 @torch.no_grad()
-def reconstruct(model, lr_raw, patch, device):
-    N = lr_raw.shape[0]
-    accumulator = np.zeros((N, N), dtype=np.float32)
-    weight_map  = np.zeros((N, N), dtype=np.float32)
-    window_small = cosine_window_2d(patch)
+def reconstruct(model, hicplus, chrom_stats, pairs, scale, device):
+    if not pairs:
+        raise SystemExit("no tiles matched")
 
-    all_positions = []
-    for band_cfg in BANDS:
-        blo, bhi = band_cfg["band"]
-        zoom = band_cfg["zoom"]
-        stride = max(band_cfg["stride"] // 2, patch)
-        win = patch * zoom
+    hr_patch = np.load(pairs[0][3]).shape[0]
+    canvas = max(max(i + hr_patch, j + hr_patch) for i, j, _, _ in pairs)
+    print(f"[mosaic] tiles={len(pairs)} canvas={canvas}x{canvas}  hr_patch={hr_patch}")
 
-        if blo >= N:
-            continue
+    def acc():
+        return np.zeros((canvas, canvas), dtype=np.float32)
 
-        zoom_idx_t = torch.tensor([ZOOM_TO_IDX[zoom]], dtype=torch.long, device=device)
+    accs = {n: acc() for n in ("LR", "Bicubic", "Gaussian", "SR-VAE", "HR")}
+    if hicplus is not None:
+        accs["HiCPlus"] = acc()
+    wmap = acc()
 
-        positions = []
-        for i in range(0, N, stride):
-            for dj in range(blo, min(bhi, N), stride):
-                j = i + dj
-                if j >= N:
-                    break
-                positions.append((i, j))
+    for i, j, lr_path, hr_path in pairs:
+        chrom, _, _ = parse_tile_name(lr_path)
+        scale_norm = chrom_stats[chrom]
+        lr_raw = np.load(lr_path).astype(np.float32)
+        hr_raw = np.load(hr_path).astype(np.float32)
 
-        print(f"[band {blo}-{bhi} z{zoom}] {len(positions)} tiles  stride={stride}")
+        lr_t = log1p_normalize(torch.from_numpy(lr_raw).unsqueeze(0).unsqueeze(0), scale_norm).to(device)
+        hr_t = log1p_normalize(torch.from_numpy(hr_raw).unsqueeze(0).unsqueeze(0), scale_norm)
 
-        for (i, j) in tqdm(positions, desc=f"band{blo}-{bhi}", leave=False):
-            ih = min(win, N - i)
-            jw = min(win, N - j)
-            tile = np.zeros((win, win), dtype=np.float32)
-            tile[:ih, :jw] = lr_raw[i:i + ih, j:j + jw]
+        sr_t, _, _ = model(lr_t, sample=False)
+        sr_np = sr_t[0, 0].clamp(0.0, 1.0).cpu().numpy()
+        hr_np = hr_t[0, 0].numpy()
+        lr_np = lr_t[0, 0].cpu().numpy()
+        out_shape = hr_np.shape
 
-            if zoom > 1:
-                coarse = _downsample(tile, zoom).astype(np.float32)
-            else:
-                coarse = tile.astype(np.float32)
+        bicubic_np = bicubic_upsample(lr_np, out_shape)
+        smoothed = gaussian_filter(lr_np.astype(np.float64), sigma=1.0).astype(np.float32)
+        gaussian_np = ndi_zoom(smoothed, (out_shape[0] / lr_np.shape[0], out_shape[1] / lr_np.shape[1]),
+                               order=1).astype(np.float32)
+        gaussian_np = np.clip(gaussian_np, 0.0, 1.0)
+        lr_up_np = bicubic_upsample(lr_np, out_shape)
 
-            tile_t = normalize(
-                torch.from_numpy(coarse).unsqueeze(0).unsqueeze(0), "oe"
-            ).to(device)
+        h, w = out_shape
+        wnd = blend_window_2d(h, w)
+        accs["LR"][i:i + h, j:j + w]      += lr_up_np   * wnd
+        accs["Bicubic"][i:i + h, j:j + w] += bicubic_np * wnd
+        accs["Gaussian"][i:i + h, j:j + w] += gaussian_np * wnd
+        accs["SR-VAE"][i:i + h, j:j + w]  += sr_np      * wnd
+        accs["HR"][i:i + h, j:j + w]      += hr_np      * wnd
+        if hicplus is not None:
+            hp_np = hicplus(lr_t)[0, 0].clamp(0.0, 1.0).cpu().numpy()
+            accs["HiCPlus"][i:i + h, j:j + w] += hp_np * wnd
+        wmap[i:i + h, j:j + w] += wnd
 
-            sr_t, _, _ = model(tile_t, zoom_idx_t, sample=False)
-            sr_np = sr_t[0, 0].cpu().numpy()
+        if i != j:
+            accs["LR"][j:j + w, i:i + h]      += lr_up_np.T   * wnd.T
+            accs["Bicubic"][j:j + w, i:i + h] += bicubic_np.T * wnd.T
+            accs["Gaussian"][j:j + w, i:i + h] += gaussian_np.T * wnd.T
+            accs["SR-VAE"][j:j + w, i:i + h]  += sr_np.T      * wnd.T
+            accs["HR"][j:j + w, i:i + h]      += hr_np.T      * wnd.T
+            if hicplus is not None:
+                accs["HiCPlus"][j:j + w, i:i + h] += hp_np.T * wnd.T
+            wmap[j:j + w, i:i + h] += wnd.T
 
-            if zoom > 1:
-                up_h = min(patch, (ih + zoom - 1) // zoom)
-                up_w = min(patch, (jw + zoom - 1) // zoom)
-                sr_np = F.interpolate(
-                    torch.from_numpy(sr_np[:up_h, :up_w]).unsqueeze(0).unsqueeze(0).float(),
-                    size=(up_h * zoom, up_w * zoom), mode="bilinear", align_corners=False,
-                ).squeeze().numpy()
-                wnd = cosine_window_2d(up_h * zoom) if up_h == up_w else np.outer(
-                    (1.0 - np.cos(np.linspace(0, np.pi, up_h * zoom))) / 2.0,
-                    (1.0 - np.cos(np.linspace(0, np.pi, up_w * zoom))) / 2.0,
-                )
-            else:
-                wnd = window_small[:patch, :patch].copy()
-
-            h = min(sr_np.shape[0], ih)
-            w = min(sr_np.shape[1], jw)
-            sr_np = sr_np[:h, :w]
-            wnd = wnd[:h, :w]
-
-            accumulator[i:i + h, j:j + w] += sr_np * wnd
-            weight_map [i:i + h, j:j + w] += wnd
-
-            if i != j:
-                accumulator[j:j + w, i:i + h] += sr_np.T * wnd.T
-                weight_map [j:j + w, i:i + h] += wnd.T
-
-    mask = weight_map > 0
-    result = np.zeros((N, N), dtype=np.float32)
-    result[mask] = accumulator[mask] / weight_map[mask]
-    return result
+    mask = wmap > 1e-8
+    out = {}
+    for name, a in accs.items():
+        m = np.zeros_like(a)
+        m[mask] = a[mask] / wmap[mask]
+        out[name] = m
+    return out, mask, len(pairs)
 
 
-def plot_panels(panels, titles, suptitle, outpath, pclip=1.0):
-    ncols = len(panels)
-    figw = 5.5 * ncols + 1
-    flat = np.concatenate([m.ravel() for m in panels])
-    vmax = max(float(np.nanpercentile(flat[flat > 0], 100 - pclip)), 0.1)
-    norm = Normalize(vmin=0, vmax=vmax)
-
-    fig, axs = plt.subplots(1, ncols, figsize=(figw, 5.5), constrained_layout=True)
-    if ncols == 1:
+def plot_panels(panels, titles, outpath, suptitle=""):
+    vmax = float(np.clip(np.max([p.max() for p in panels]), 1e-6, 1.0))
+    fig, axs = plt.subplots(1, len(panels), figsize=(4.6 * len(panels), 4.6),
+                            constrained_layout=True)
+    if len(panels) == 1:
         axs = [axs]
-    for ax, arr, t in zip(axs, panels, titles):
-        im = ax.imshow(arr, cmap="Reds", norm=norm, interpolation="nearest")
-        ax.set_title(t, fontsize=11)
-        ax.set_xticks([]); ax.set_yticks([])
+    for ax, arr, title in zip(axs, panels, titles):
+        im = ax.imshow(arr, cmap="Reds", vmin=0.0, vmax=vmax, interpolation="nearest")
+        ax.set_title(title, fontsize=10)
+        ax.set_xticks([])
+        ax.set_yticks([])
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    fig.suptitle(suptitle, fontsize=13)
-    fig.savefig(outpath, dpi=150)
+    if suptitle:
+        fig.suptitle(suptitle, fontsize=12)
+    fig.savefig(outpath, dpi=160)
     plt.close(fig)
     print(f"[saved] {outpath}")
 
 
-def hicrep_scc(mat_a, mat_b, max_dist_bp=500000, res=10000, smooth=5):
-    import scipy.sparse as sp
-    from scipy.ndimage import uniform_filter
-    a = uniform_filter(mat_a.astype(np.float64), size=2*smooth+1)
-    b = uniform_filter(mat_b.astype(np.float64), size=2*smooth+1)
-    n_diags = max_dist_bp // res
-    m1 = sp.coo_matrix(a)
-    m2 = sp.coo_matrix(b)
-    try:
-        from hicrep.hicrep import sccByDiag
-        return float(sccByDiag(m1, m2, n_diags))
-    except Exception:
-        N = a.shape[0]
-        scores, weights = [], []
-        for d in range(min(n_diags, N)):
-            da = np.diag(a, k=d)
-            db = np.diag(b, k=d)
-            if len(da) < 3:
-                break
-            va, vb = np.var(da), np.var(db)
-            if va < 1e-12 or vb < 1e-12:
-                continue
-            r = float(np.corrcoef(da, db)[0, 1])
-            if np.isnan(r):
-                continue
-            scores.append(r)
-            weights.append(len(da) * np.sqrt(va * vb))
-        if not scores:
-            return 0.0
-        return float(np.average(np.array(scores), weights=np.array(weights)))
-
-
-def _row_normalize(mat):
-    row_sums = mat.sum(axis=1, keepdims=True)
-    row_sums[row_sums == 0] = 1.0
-    return mat / row_sums
-
-
-def genomedisco(mat_a, mat_b, t_steps=3, subsample=2000):
-    a = np.clip(mat_a, 0, None).astype(np.float64)
-    b = np.clip(mat_b, 0, None).astype(np.float64)
-    N = a.shape[0]
-    if N > subsample:
-        step = N // subsample
-        idx = np.arange(0, N, step)[:subsample]
-        a = a[np.ix_(idx, idx)]
-        b = b[np.ix_(idx, idx)]
-    Ta = _row_normalize(a)
-    Tb = _row_normalize(b)
-    scores = []
-    for _ in range(t_steps):
-        Ta = Ta @ Ta
-        Tb = Tb @ Tb
-        diff = np.sum(np.abs(Ta - Tb)) / (2.0 * Ta.shape[0])
-        scores.append(1.0 - float(diff))
-    return float(np.mean(scores))
-
-
-def per_distance_mse(mat_a, mat_b, max_dist=100):
-    N = mat_a.shape[0]
-    results = []
-    for d in range(min(max_dist, N)):
-        a = np.diag(mat_a, k=d)
-        b = np.diag(mat_b, k=d)
-        if len(a) < 1:
-            break
-        results.append(float(np.mean((a - b) ** 2)))
-    return results
-
-
-def ssim_full(x, y, k=11):
-    C1, C2 = 0.01**2, 0.03**2
-    x, y = x.astype(np.float32), y.astype(np.float32)
-
-    def box_mean(img, k):
-        if k <= 1:
-            return img.copy()
-        pad = k // 2
-        a = np.pad(img, pad, mode="edge")
-        ii = np.cumsum(np.cumsum(a, 0), 1)
-        return (ii[k:, k:] - ii[:-k, k:] - ii[k:, :-k] + ii[:-k, :-k]) / (k * k)
-
-    mu_x, mu_y = box_mean(x, k), box_mean(y, k)
-    sig_x2 = box_mean(x * x, k) - mu_x**2
-    sig_y2 = box_mean(y * y, k) - mu_y**2
-    sig_xy = box_mean(x * y, k) - mu_x * mu_y
-    num = (2 * mu_x * mu_y + C1) * (2 * sig_xy + C2)
-    den = (mu_x**2 + mu_y**2 + C1) * (sig_x2 + sig_y2 + C2)
-    return float(np.clip(np.mean(num / (den + 1e-12)), -1, 1))
-
-
+@torch.no_grad()
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mcool",    required=True)
-    ap.add_argument("--res",      type=int, default=10000)
-    ap.add_argument("--chrom",    default="chr17")
-    ap.add_argument("--ckpt",     required=True)
-    ap.add_argument("--config",   required=True)
-    ap.add_argument("--outdir",   default="./runs/sr_vae/reconstruction")
-    ap.add_argument("--patch",    type=int, default=256)
+    ap.add_argument("--config", required=True)
+    ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--hicplus-ckpt", default="")
+    ap.add_argument("--split", default="test")
+    ap.add_argument("--chrom", default="19")
+    ap.add_argument("--outdir", required=True)
     ap.add_argument("--save-npy", action="store_true")
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
-    cfg    = yaml.safe_load(open(args.config))
+    with open(args.config, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    seed = int(cfg.get("seed", 42))
+    set_global_seed(seed, deterministic=bool(cfg.get("deterministic", True)))
+    write_run_artifacts(args.outdir, script_name="scripts/reconstruct_chromosome.py",
+                        args_dict=vars(args), cfg=cfg, extra={"seed": seed})
 
-    ck      = torch.load(args.ckpt, map_location="cpu")
-    z_ch    = int(ck.get("z_ch",    cfg.get("vae", {}).get("z_ch", 64)))
-    scale   = int(ck.get("scale",   cfg.get("srvae", {}).get("scale", 1)))
-    base_ch = int(ck.get("base_ch", cfg.get("vae", {}).get("base_ch", 64)))
-    num_zooms = int(ck.get("num_zooms", cfg.get("num_zooms", 6)))
+    stats = load_chrom_stats(cfg.get("data", {}).get("stats", "tiles/hr/stats.json"))
 
-    model = SRVAE(z_ch=z_ch, scale_factor=scale, base_ch=base_ch, num_zooms=num_zooms).to(device).eval()
-    model.load_state_dict(ck["model"], strict=False)
-    print(f"[model] loaded {args.ckpt} (epoch {ck.get('epoch', '?')})")
+    ck = torch.load(args.ckpt, map_location="cpu")
+    model = build_model(ck.get("model_name", "srvae"),
+                        z_ch=ck.get("z_ch", 32), base_ch=ck.get("base_ch", 32),
+                        scale_factor=ck.get("scale", 2)).to(device).eval()
+    model.load_state_dict(ck["model"])
+    print(f"[main] loaded {args.ckpt} (epoch {ck.get('epoch', '?')})")
 
-    try:
-        import cooler
-    except ImportError:
-        print("[error] pip install cooler"); sys.exit(1)
+    hicplus = None
+    if args.hicplus_ckpt:
+        hck = torch.load(args.hicplus_ckpt, map_location="cpu")
+        hicplus = build_model("hicplus", scale_factor=hck.get("scale", 2)).to(device).eval()
+        hicplus.load_state_dict(hck["model"])
+        print(f"[baseline] loaded HiCPlus from {args.hicplus_ckpt}")
 
-    c = cooler.Cooler(f"{args.mcool}::/resolutions/{args.res}")
-    chrom = args.chrom
-    if chrom not in c.chromnames:
-        alt = chrom.replace("chr", "") if chrom.startswith("chr") else f"chr{chrom}"
-        if alt in c.chromnames:
-            chrom = alt
-        else:
-            print(f"[error] {args.chrom} not in {c.chromnames}"); sys.exit(1)
+    chrom = str(args.chrom).replace("chr", "")
+    pairs = collect_pairs(cfg, args.split, chrom)
+    mosaics, mask, n = reconstruct(model, hicplus, stats, pairs,
+                                   scale=ck.get("scale", 2), device=device)
 
-    hr_raw = c.matrix(balance=False).fetch(chrom).astype(np.float32)
-    hr_raw = 0.5 * (hr_raw + hr_raw.T)
-    N = hr_raw.shape[0]
-    print(f"[data] {chrom} at {args.res}bp -> {N}x{N} bins")
+    methods = ["LR", "Bicubic", "Gaussian", "SR-VAE"] + (["HiCPlus"] if hicplus is not None else [])
+    rows = []
+    for name in methods:
+        rows.append({
+            "method": name,
+            "mse": mse_np(mosaics[name][mask], mosaics["HR"][mask]),
+            "ssim": masked_ssim(mosaics[name], mosaics["HR"], mask, data_range=1.0),
+            "genomedisco": genomedisco_score(np.where(mask, mosaics[name], 0.0),
+                                              np.where(mask, mosaics["HR"], 0.0)),
+            "hicspector": hicspector_score(np.where(mask, mosaics[name], 0.0),
+                                            np.where(mask, mosaics["HR"], 0.0)),
+            "coverage": float(mask.mean()),
+            "n_tiles": n,
+        })
 
-    lr_raw = binomial_thin(hr_raw, frac=1/16)
-    print(f"[thinned] 1/16 fraction -> LR input")
-
-    sr = reconstruct(model, lr_raw, args.patch, device)
-
-    lr_oe = oe_normalize_full(lr_raw)
-    sr_oe = sr
-    hr_oe = oe_normalize_full(hr_raw)
-
-    from scipy.ndimage import uniform_filter, gaussian_filter
-    gauss_raw = gaussian_filter(lr_raw.astype(np.float64), sigma=2.0).astype(np.float32)
-    gauss_oe = oe_normalize_full(gauss_raw)
-
-    T = _row_normalize(lr_raw.astype(np.float64))
-    diffused_raw = (T @ T @ lr_raw.astype(np.float64)).astype(np.float32)
-    diffused_raw = 0.5 * (diffused_raw + diffused_raw.T)
-    diffused_oe = oe_normalize_full(diffused_raw)
-
-    print("[baselines] Gaussian smooth + graph diffusion computed")
-
+    out_base = f"{args.split}_chr{chrom}"
     plot_panels(
-        [np.clip(lr_oe, 0, None), np.clip(gauss_oe, 0, None),
-         np.clip(diffused_oe, 0, None), np.clip(sr_oe, 0, None),
-         np.clip(hr_oe, 0, None)],
-        ["LR (1/16)", "Gaussian", "Diffusion", "SR-VAE", "HR (truth)"],
-        suptitle=f"{args.chrom} @ {args.res // 1000}kb — OE normalized",
-        outpath=os.path.join(args.outdir, f"{args.chrom}_oe.png"),
+        [mosaics[m] for m in methods] + [mosaics["HR"]],
+        methods + ["HR"],
+        outpath=os.path.join(args.outdir, f"{out_base}_mosaic.png"),
+        suptitle=f"Tile-mosaic: split={args.split} chr{chrom} coverage={mask.mean()*100:.1f}%",
     )
+    plot_panels([mask.astype(np.float32)], ["Support"],
+                outpath=os.path.join(args.outdir, f"{out_base}_support.png"))
 
-    plot_panels(
-        [np.log1p(lr_raw), np.log1p(hr_raw)],
-        ["LR (1/16 thinned)", "HR (ground truth)"],
-        suptitle=f"{args.chrom} @ {args.res // 1000}kb — log1p raw counts",
-        outpath=os.path.join(args.outdir, f"{args.chrom}_raw.png"),
-    )
-
-    methods = {
-        "LR (raw)":       lr_oe,
-        "Gaussian":       gauss_oe,
-        "Diffusion":      diffused_oe,
-        "SR-VAE":         sr_oe,
-    }
-
-    print(f"\n{'Method':<16} {'MSE':>8} {'SSIM':>8} {'HiCRep':>8} {'DISCO':>8}")
-    print("-" * 52)
-    dist_mse_all = {}
-    for name, pred in methods.items():
-        m = float(np.mean((pred - hr_oe) ** 2))
-        s = ssim_full(pred, hr_oe)
-        scc_v = hicrep_scc(pred, hr_oe)
-        disco_v = genomedisco(pred, hr_oe)
-        print(f"{name:<16} {m:>8.4f} {s:>8.3f} {scc_v:>8.3f} {disco_v:>8.3f}")
-        dist_mse_all[name] = per_distance_mse(pred, hr_oe, max_dist=100)
-
-    fig, ax = plt.subplots(figsize=(8, 3.5), constrained_layout=True)
-    for name, vals in dist_mse_all.items():
-        ax.plot(vals, linewidth=1.2, label=name)
-    ax.set_xlabel("Genomic distance (bins)")
-    ax.set_ylabel("MSE")
-    ax.set_title(f"{args.chrom} — per-distance MSE vs HR")
-    ax.legend(fontsize=8)
-    fig.savefig(os.path.join(args.outdir, f"{args.chrom}_distance_mse.png"), dpi=150)
-    plt.close(fig)
-    print(f"[saved] {args.chrom}_distance_mse.png")
+    csv_path = os.path.join(args.outdir, f"{out_base}_metrics.csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["method", "mse", "ssim", "genomedisco", "hicspector", "coverage", "n_tiles"])
+        w.writeheader()
+        w.writerows(rows)
+    print(f"[saved] {csv_path}")
 
     if args.save_npy:
-        np.save(os.path.join(args.outdir, f"{args.chrom}_sr.npy"), sr)
-        print(f"[saved] npy to {args.outdir}")
+        for n_, arr in mosaics.items():
+            np.save(os.path.join(args.outdir, f"{out_base}_{n_.lower().replace('-', '')}.npy"), arr)
 
-    print(f"\n[done] {args.chrom}")
+    print("\n[summary]")
+    for r in rows:
+        print(f"  {r['method']:8s}  MSE={r['mse']:.4f}  SSIM={r['ssim']:.3f}  DISCO={r['genomedisco']:.3f}  HiC-Spec={r['hicspector']:.3f}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,34 @@
+# Full-data paper config: 2x super-resolution SR-VAE on Hi-C tiles.
+
+data:
+  train_lr: tiles/lr/train/*.npy
+  train_hr: tiles/hr/train/*.npy
+  val_lr:   tiles/lr/val/*.npy
+  val_hr:   tiles/hr/val/*.npy
+  test_lr:  tiles/lr/test/*.npy
+  test_hr:  tiles/hr/test/*.npy
+  stats:    tiles/hr/stats.json
+
+vae:
+  z_ch: 32
+  base_ch: 32
+  epochs: 50
+  batch_size: 8
+  lr: 0.0002
+  save_dir: ./runs/paper_full
+
+srvae:
+  scale: 2
+
+num_workers: 4
+seed: 42
+deterministic: true
+
+loss:
+  rec_w: 1.00
+  ssim_w: 0.50
+  grad_w: 0.25
+  beta_start: 0.0
+  beta_end: 0.0001   # KL is sum-reduced over latent dims (~32k), so a small beta still gives meaningful regularization
+  kl_warmup_epochs: 10
+  free_bits: 0.0     # set >0 (e.g. 0.01) if you observe posterior collapse
