@@ -168,14 +168,48 @@ def train(cfg, model_name: str, resume_path: str | None = None):
             print(f"  [save] new best -> {best_path} ({best_val:.4f})")
 
 
+def _coerce(val: str):
+    if val.lower() in ("true", "false"):
+        return val.lower() == "true"
+    try:
+        if "." in val or "e" in val.lower():
+            return float(val)
+        return int(val)
+    except ValueError:
+        return val
+
+
+def _apply_override(cfg: dict, key: str, val):
+    parts = key.split(".")
+    d = cfg
+    for p in parts[:-1]:
+        d = d.setdefault(p, {})
+    d[parts[-1]] = val
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--model", choices=["srvae", "hicplus"], default="srvae")
     ap.add_argument("--resume", default="")
+    ap.add_argument("--seed", type=int, default=None, help="Override cfg.seed")
+    ap.add_argument("--save-dir", default="", help="Override cfg.vae.save_dir")
+    ap.add_argument("--set", action="append", default=[], metavar="key=value",
+                    help="Override any dotted config key, e.g. loss.beta_end=0 loss.ssim_w=0")
     args = ap.parse_args()
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+
+    if args.seed is not None:
+        cfg["seed"] = int(args.seed)
+    if args.save_dir:
+        cfg.setdefault("vae", {})["save_dir"] = args.save_dir
+    for kv in args.set:
+        if "=" not in kv:
+            raise SystemExit(f"--set expects key=value, got {kv!r}")
+        k, v = kv.split("=", 1)
+        _apply_override(cfg, k.strip(), _coerce(v.strip()))
+
     train(cfg, model_name=args.model, resume_path=args.resume or None)
 
 

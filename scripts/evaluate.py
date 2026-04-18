@@ -79,6 +79,25 @@ def load_optional_baseline(path: str | None, device: str):
     return model
 
 
+def _coerce(val: str):
+    if val.lower() in ("true", "false"):
+        return val.lower() == "true"
+    try:
+        if "." in val or "e" in val.lower():
+            return float(val)
+        return int(val)
+    except ValueError:
+        return val
+
+
+def _apply_override(cfg: dict, key: str, val):
+    parts = key.split(".")
+    d = cfg
+    for p in parts[:-1]:
+        d = d.setdefault(p, {})
+    d[parts[-1]] = val
+
+
 @torch.no_grad()
 def main():
     ap = argparse.ArgumentParser()
@@ -91,11 +110,18 @@ def main():
     ap.add_argument("--no-disco", action="store_true",
                     help="Skip GenomeDISCO/HiC-Spector (faster, lower RAM)")
     ap.add_argument("--dpi", type=int, default=160)
+    ap.add_argument("--set", action="append", default=[], metavar="key=value",
+                    help="Override any dotted config key, e.g. data.test_lr=tiles/lr_frac08/test/*.npy")
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+    for kv in args.set:
+        if "=" not in kv:
+            raise SystemExit(f"--set expects key=value, got {kv!r}")
+        k, v = kv.split("=", 1)
+        _apply_override(cfg, k.strip(), _coerce(v.strip()))
     device = "cuda" if torch.cuda.is_available() else "cpu"
     seed = int(cfg.get("seed", 42))
     deterministic = bool(cfg.get("deterministic", True))
