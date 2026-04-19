@@ -111,7 +111,7 @@ parameterization.
 
 Downstream feature calling is served by HiCCUPS [Rao+ 2014] for loops,
 insulation-score / boundary detection [Crane+ 2015] for TADs, and spectral
-reproducibility scores GenomeDISCO [Ursu+ 2018] and HiC-Spector [Yang+ 2017]
+reproducibility scores GenomeDISCO [Ursu+ 2018] and HiC-Spector [Yan+ 2017]
 for whole-map similarity. We use all four in evaluation.
 
 ## 3. Methods
@@ -199,7 +199,7 @@ We compare against four baselines, each evaluated on the same test tiles:
 - **Pixel-level:** mean squared error (MSE) and structural similarity index
   (SSIM, 11-bin window) in the normalized `log1p` space.
 - **Spectral / reproducibility:** GenomeDISCO [Ursu+ 2018] and
-  HiC-Spector [Yang+ 2017] — standard cross-replicate similarity scores.
+  HiC-Spector [Yan+ 2017] — standard cross-replicate similarity scores.
 - **Biological:** insulation-score profile Pearson correlation, TAD-boundary
   F1 with a threshold sweep for AUPRC, chromatin-loop F1 with a threshold
   sweep for AUPRC.
@@ -513,29 +513,25 @@ dominated by the three seed-retraining runs.
 
 ## References
 
-1. Rao, S. S. P., *et al.* **A 3D map of the human genome at kilobase
-   resolution reveals principles of chromatin looping.** *Cell*, 2014.
-2. Zhang, Y., *et al.* **Enhancing Hi-C data resolution with deep
-   convolutional neural network HiCPlus.** *Nature Communications*, 2018.
-3. Liu, T. & Wang, Z. **HiCNN: a very deep convolutional neural network to
-   better enhance the resolution of Hi-C data.** *Bioinformatics*, 2019.
-4. Hong, H., *et al.* **DeepHiC: a generative adversarial network for
-   enhancing Hi-C data resolution.** *PLoS Computational Biology*, 2020.
-5. Dimmick, M. C., *et al.* **HiCSR: a Hi-C super-resolution framework.**
-   *Bioinformatics*, 2020.
-6. Hicks, P. & Oluwadare, O. **HiCARN: resolution enhancement of Hi-C data
-   using cascading residual networks.** *Bioinformatics*, 2022.
-7. Ursu, O., *et al.* **GenomeDISCO: a concordance score for chromosome
-   conformation capture experiments using random walks on contact
-   networks.** *Bioinformatics*, 2018.
-8. Yang, T., *et al.* **HiCRep: assessing the reproducibility of Hi-C data
-   using a stratum-adjusted correlation coefficient.** *Genome Research*,
-   2017. (HiC-Spector companion: Yan, K.-K. *et al.*, *Bioinformatics*,
-   2017.)
-9. Crane, E., *et al.* **Condensin-driven remodelling of X chromosome
-   topology during dosage compensation.** *Nature*, 2015. (insulation score)
-10. Kingma, D. P. & Welling, M. **Auto-encoding variational Bayes.**
-    *ICLR*, 2014.
+1. Rao, S. S. P., *et al.* A 3D map of the human genome at kilobase resolution reveals principles of chromatin looping. *Cell* **159**(7), 1665–1680 (2014). <https://doi.org/10.1016/j.cell.2014.11.021>
+
+2. Zhang, Y., *et al.* Enhancing Hi-C data resolution with deep convolutional neural network HiCPlus. *Nature Communications* **9**, 750 (2018). <https://doi.org/10.1038/s41467-018-03113-2>
+
+3. Liu, T. & Wang, Z. HiCNN: a very deep convolutional neural network to better enhance the resolution of Hi-C data. *Bioinformatics* **35**(21), 4222–4228 (2019). <https://doi.org/10.1093/bioinformatics/btz251>
+
+4. Hong, H., *et al.* DeepHiC: a generative adversarial network for enhancing Hi-C data resolution. *PLoS Computational Biology* **16**(2), e1007287 (2020). <https://doi.org/10.1371/journal.pcbi.1007287>
+
+5. Dimmick, M. C., Lee, L. J. & Frey, B. J. HiCSR: a Hi-C super-resolution framework for producing highly realistic contact maps. *bioRxiv* 2020.02.24.961714 (2020). <https://doi.org/10.1101/2020.02.24.961714>
+
+6. Hicks, P. & Oluwadare, O. HiCARN: resolution enhancement of Hi-C data using cascading residual networks. *Bioinformatics* **38**(9), 2414–2421 (2022). <https://doi.org/10.1093/bioinformatics/btac156>
+
+7. Ursu, O., *et al.* GenomeDISCO: a concordance score for chromosome conformation capture experiments using random walks on contact map graphs. *Bioinformatics* **34**(16), 2701–2707 (2018). <https://doi.org/10.1093/bioinformatics/bty164>
+
+8. Yan, K.-K., Yardımcı, G. G., Yan, C., Noble, W. S. & Gerstein, M. HiC-spector: a matrix library for spectral and reproducibility analysis of Hi-C contact maps. *Bioinformatics* **33**(14), 2199–2201 (2017). <https://doi.org/10.1093/bioinformatics/btx152>
+
+9. Crane, E., *et al.* Condensin-driven remodelling of X chromosome topology during dosage compensation. *Nature* **523**, 240–244 (2015). <https://doi.org/10.1038/nature14450>
+
+10. Kingma, D. P. & Welling, M. Auto-encoding variational Bayes. *arXiv* preprint arXiv:1312.6114 (2013); presented at the *International Conference on Learning Representations* (ICLR), 2014. <https://doi.org/10.48550/arXiv.1312.6114>
 
 ---
 
