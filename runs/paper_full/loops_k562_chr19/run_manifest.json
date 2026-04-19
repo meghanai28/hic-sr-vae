@@ -1,0 +1,35 @@
+{
+  "args": {
+    "abs_thresh": 0.05,
+    "chrom": "19",
+    "enr_thresh": 1.5,
+    "inner": 1,
+    "max_sep": 200,
+    "min_sep": 20,
+    "mosaic_dir": "runs/paper_full/reconstruction_k562_chr19",
+    "outdir": "runs/paper_full/loops_k562_chr19",
+    "outer": 5,
+    "peak_radius": 2,
+    "split": "test",
+    "sweep": true,
+    "sweep_max": 3.0,
+    "sweep_min": 1.05,
+    "sweep_steps": 20,
+    "tol": 3
+  },
+  "runtime": {
+    "cuda_available": true,
+    "cuda_device_count": 1,
+    "cuda_device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "cwd": "C:\\Users\\megha\\OneDrive\\Desktop\\hic-sr-vae",
+    "git_branch": "main",
+    "git_commit": "0759a62c7965bc3d11e4555dc645295109d7dc33",
+    "git_dirty": true,
+    "numpy": "2.1.1",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.5 (tags/v3.12.5:ff3bc82, Aug  6 2024, 20:45:27) [MSC v.1940 64 bit (AMD64)]",
+    "timestamp_utc": "2026-04-19T21:09:39.094805+00:00",
+    "torch": "2.5.1+cu121"
+  },
+  "script": "scripts/loop_validation.py"
+}

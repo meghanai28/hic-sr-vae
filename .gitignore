@@ -1,8 +1,12 @@
 
 data/
 tiles/
+tiles_k562/
 
-runs/
+# Keep runs/ committed so downstream users get checkpoints + metrics CSVs,
+# but skip the large reconstructed-matrix .npy files (regeneratable from
+# checkpoints + tiles via scripts/reconstruct_chromosome.py).
+runs/**/*.npy
 
 data_sanity_check/
 

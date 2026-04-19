@@ -1,0 +1,29 @@
+{
+  "args": {
+    "chrom": "chr19",
+    "ckpt": "runs/paper_full/srvae_best.pt",
+    "config": "configs/paper_full_k562.yaml",
+    "hicplus_ckpt": "runs/paper_full_hicplus/hicplus_best.pt",
+    "outdir": "runs/paper_full/reconstruction_k562_chr19",
+    "save_npy": true,
+    "split": "test"
+  },
+  "extra": {
+    "seed": 42
+  },
+  "runtime": {
+    "cuda_available": true,
+    "cuda_device_count": 1,
+    "cuda_device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "cwd": "C:\\Users\\megha\\OneDrive\\Desktop\\hic-sr-vae",
+    "git_branch": "main",
+    "git_commit": "0759a62c7965bc3d11e4555dc645295109d7dc33",
+    "git_dirty": true,
+    "numpy": "2.1.1",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.5 (tags/v3.12.5:ff3bc82, Aug  6 2024, 20:45:27) [MSC v.1940 64 bit (AMD64)]",
+    "timestamp_utc": "2026-04-19T12:57:07.936090+00:00",
+    "torch": "2.5.1+cu121"
+  },
+  "script": "scripts/reconstruct_chromosome.py"
+}

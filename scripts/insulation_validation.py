@@ -141,11 +141,15 @@ def main():
         raise SystemExit(f"HR mosaic not found. Did you pass --save-npy to reconstruct_chromosome.py? "
                          f"Expected: {os.path.join(args.mosaic_dir, base + '_hr.npy')}")
 
-    # Mask: the reconstructed band. Only score bins whose insulation window is fully inside it.
+    # Mask: the reconstructed band. Only score bins whose insulation window is inside it.
+    # Sparse cell lines (e.g. K562 at matched depth) can have fully-legit bins with
+    # individual zero pixels, so we require a density floor rather than all-nonzero.
     support = hr > 0
     diag_ok = np.zeros(hr.shape[0], dtype=bool)
+    min_support_frac = 0.25
     for i in range(args.window, hr.shape[0] - args.window):
-        if support[i - args.window:i + args.window + 1, i - args.window:i + args.window + 1].all():
+        block = support[i - args.window:i + args.window + 1, i - args.window:i + args.window + 1]
+        if float(block.mean()) >= min_support_frac:
             diag_ok[i] = True
 
     hr_is = insulation_score(hr, w=args.window)

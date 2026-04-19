@@ -1,0 +1,26 @@
+{
+  "args": {
+    "model": "srvae",
+    "resume": ""
+  },
+  "extra": {
+    "deterministic": true,
+    "model_params": 2568674,
+    "seed": 42
+  },
+  "runtime": {
+    "cuda_available": true,
+    "cuda_device_count": 1,
+    "cuda_device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "cwd": "C:\\Users\\megha\\OneDrive\\Desktop\\hic-sr-vae",
+    "git_branch": "main",
+    "git_commit": "e61c7e9199f90be5fcdac62cff09bf74bc64fea4",
+    "git_dirty": true,
+    "numpy": "2.1.1",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.5 (tags/v3.12.5:ff3bc82, Aug  6 2024, 20:45:27) [MSC v.1940 64 bit (AMD64)]",
+    "timestamp_utc": "2026-04-17T08:15:44.040970+00:00",
+    "torch": "2.5.1+cu121"
+  },
+  "script": "scripts/train.py"
+}

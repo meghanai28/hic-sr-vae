@@ -83,13 +83,15 @@ def collect_pairs(cfg, split, chrom):
     hr_glob = data.get(f"{split}_hr") or f"tiles/hr/{split}/*.npy"
     lrs = sorted(glob.glob(lr_glob, recursive=True))
     hrs = {os.path.basename(p): p for p in sorted(glob.glob(hr_glob, recursive=True))}
+    norm = lambda s: str(s).replace("chr", "")
+    target = norm(chrom)
     out = []
     for lr_path in lrs:
         name = os.path.basename(lr_path)
         if name not in hrs:
             continue
         ch, i, j = parse_tile_name(name)
-        if ch != chrom:
+        if norm(ch) != target:
             continue
         out.append((i, j, lr_path, hrs[name]))
     return out

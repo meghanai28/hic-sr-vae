@@ -1,0 +1,30 @@
+{
+  "args": {
+    "chrom": "20",
+    "delta_window": 10,
+    "min_strength": 0.1,
+    "mosaic_dir": "runs/paper_full/reconstruction_chr20",
+    "outdir": "runs/paper_full/insulation_chr20",
+    "plot_range": null,
+    "split": "test",
+    "sweep_steps": 31,
+    "sweep_strength": true,
+    "tol": 5,
+    "window": 20
+  },
+  "runtime": {
+    "cuda_available": true,
+    "cuda_device_count": 1,
+    "cuda_device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "cwd": "C:\\Users\\megha\\OneDrive\\Desktop\\hic-sr-vae",
+    "git_branch": "main",
+    "git_commit": "1eb8917139205ac2e48eecbcfeb5747fde9eadbe",
+    "git_dirty": true,
+    "numpy": "2.1.1",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.5 (tags/v3.12.5:ff3bc82, Aug  6 2024, 20:45:27) [MSC v.1940 64 bit (AMD64)]",
+    "timestamp_utc": "2026-04-19T09:08:31.909019+00:00",
+    "torch": "2.5.1+cu121"
+  },
+  "script": "scripts/insulation_validation.py"
+}

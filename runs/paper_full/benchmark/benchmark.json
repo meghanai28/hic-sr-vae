@@ -1,0 +1,15 @@
+{
+  "batches_measured": 64,
+  "checkpoint_epoch": 9,
+  "device": "cuda",
+  "latency_mean_ms": 38.91050625003345,
+  "latency_median_ms": 38.85154999989027,
+  "latency_p95_ms": 40.90466499765171,
+  "latency_std_ms": 1.134354244996168,
+  "model": "srvae",
+  "model_params": 2568674,
+  "peak_memory_mb": 228.3115234375,
+  "samples_measured": 512,
+  "throughput_samples_per_sec": 205.59999781532326,
+  "warmup_batches": 8
+}

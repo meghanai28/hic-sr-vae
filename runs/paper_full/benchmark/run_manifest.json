@@ -1,0 +1,27 @@
+{
+  "args": {
+    "ckpt": "runs/paper_full/srvae_best.pt",
+    "config": "configs/paper_full.yaml",
+    "max_batches": 64,
+    "outdir": "runs/paper_full/benchmark",
+    "warmup": 8
+  },
+  "extra": {
+    "seed": 42
+  },
+  "runtime": {
+    "cuda_available": true,
+    "cuda_device_count": 1,
+    "cuda_device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "cwd": "C:\\Users\\megha\\OneDrive\\Desktop\\hic-sr-vae",
+    "git_branch": "main",
+    "git_commit": "4cb7341efc56b0053ed5cb756c7cb58d4a5c13f5",
+    "git_dirty": null,
+    "numpy": "2.1.1",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.5 (tags/v3.12.5:ff3bc82, Aug  6 2024, 20:45:27) [MSC v.1940 64 bit (AMD64)]",
+    "timestamp_utc": "2026-04-17T21:14:38.298969+00:00",
+    "torch": "2.5.1+cu121"
+  },
+  "script": "scripts/benchmark.py"
+}
