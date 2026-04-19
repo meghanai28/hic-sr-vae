@@ -122,6 +122,11 @@ def main():
     ap.add_argument("--tol", type=int, default=5, help="Boundary match tolerance (bins)")
     ap.add_argument("--plot-range", nargs=2, type=int, default=None,
                     help="Optional (start, end) HR bin range for the profile figure")
+    ap.add_argument("--sweep-strength", action="store_true",
+                    help="Also sweep min_strength from 0.0 to 0.3 and emit a "
+                         "per-method F1-vs-threshold CSV + curve.")
+    ap.add_argument("--sweep-steps", type=int, default=31,
+                    help="Number of min_strength values in [0, 0.3] for --sweep-strength")
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -217,6 +222,67 @@ def main():
         print(f"  {r['method']:10s}  {r['pearson_is']:+.3f}   "
               f"{r['boundary_precision']:.3f}  {r['boundary_recall']:.3f}   "
               f"{r['boundary_f1']:.3f}  ({r['n_boundaries_pred']}/{r['n_boundaries_hr']})")
+
+    if args.sweep_strength:
+        thresholds = np.linspace(0.0, 0.3, args.sweep_steps)
+        sweep_rows = []
+        curves = {}
+        for name, prof in profiles.items():
+            if name == "HR":
+                continue
+            prec_list, rec_list, f1_list = [], [], []
+            for t in thresholds:
+                hr_b = call_boundaries(hr_is, delta_w=args.delta_window, min_strength=float(t))
+                hr_b = hr_b[diag_ok[hr_b]] if hr_b.size else hr_b
+                pr_b = call_boundaries(prof, delta_w=args.delta_window, min_strength=float(t))
+                pr_b = pr_b[diag_ok[pr_b]] if pr_b.size else pr_b
+                p, r, f1 = boundary_f1(pr_b, hr_b, tol=args.tol)
+                prec_list.append(p); rec_list.append(r); f1_list.append(f1)
+                sweep_rows.append({
+                    "method": name, "min_strength": float(t),
+                    "precision": p, "recall": r, "f1": f1,
+                    "n_pred": int(pr_b.size), "n_hr": int(hr_b.size),
+                })
+            curves[name] = (np.asarray(prec_list), np.asarray(rec_list), np.asarray(f1_list))
+
+        sweep_csv = os.path.join(args.outdir, f"{base}_insulation_sweep.csv")
+        with open(sweep_csv, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["method", "min_strength", "precision", "recall",
+                                              "f1", "n_pred", "n_hr"])
+            w.writeheader()
+            w.writerows(sweep_rows)
+        print(f"[saved] {sweep_csv}")
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.4), constrained_layout=True)
+        for name, (p, r, f1) in curves.items():
+            ax1.plot(thresholds, f1, label=name, linewidth=1.4)
+            ok = np.isfinite(p) & np.isfinite(r)
+            ax2.plot(r[ok], p[ok], label=name, linewidth=1.4, marker=".", markersize=3)
+        ax1.set_xlabel("min_strength (log2 IS dip)")
+        ax1.set_ylabel("Boundary F1 vs HR")
+        ax1.set_title("F1 vs threshold")
+        ax1.legend(fontsize=8); ax1.set_ylim(0, 1)
+        ax2.set_xlabel("Recall"); ax2.set_ylabel("Precision")
+        ax2.set_title("Precision-recall (sweeping min_strength)")
+        ax2.legend(fontsize=8); ax2.set_xlim(0, 1); ax2.set_ylim(0, 1.05)
+        sweep_png = os.path.join(args.outdir, f"{base}_insulation_sweep.png")
+        fig.savefig(sweep_png, dpi=160)
+        plt.close(fig)
+        print(f"[saved] {sweep_png}")
+
+        # Per-method best F1 + AUPRC
+        print("\n[sweep summary]")
+        print(f"  {'method':10s}  best_F1  @threshold   AUPRC")
+        for name, (p, r, f1) in curves.items():
+            f1a = np.asarray(f1, dtype=np.float64)
+            best_i = int(np.nanargmax(f1a)) if np.isfinite(f1a).any() else 0
+            ok = np.isfinite(p) & np.isfinite(r)
+            if ok.sum() > 1:
+                order = np.argsort(r[ok])
+                auprc = float(np.trapezoid(p[ok][order], r[ok][order]))
+            else:
+                auprc = float("nan")
+            print(f"  {name:10s}  {f1a[best_i]:.3f}   {thresholds[best_i]:.3f}      {auprc:.3f}")
 
 
 if __name__ == "__main__":
