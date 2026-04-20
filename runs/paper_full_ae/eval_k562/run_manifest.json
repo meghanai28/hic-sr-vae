@@ -1,0 +1,32 @@
+{
+  "args": {
+    "ckpt": "runs/paper_full_ae/srvae_best.pt",
+    "config": "configs/paper_full_k562.yaml",
+    "dpi": 160,
+    "hicplus_ckpt": "runs/paper_full_hicplus/hicplus_best.pt",
+    "max_samples": 0,
+    "no_disco": false,
+    "no_plots": false,
+    "outdir": "runs/paper_full_ae/eval_k562",
+    "set": []
+  },
+  "extra": {
+    "deterministic": true,
+    "seed": 42
+  },
+  "runtime": {
+    "cuda_available": true,
+    "cuda_device_count": 1,
+    "cuda_device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "cwd": "C:\\Users\\megha\\OneDrive\\Desktop\\hic-sr-vae",
+    "git_branch": "main",
+    "git_commit": "54cc6ab2370f2679a17709384684d9f8256e12fc",
+    "git_dirty": true,
+    "numpy": "2.4.3",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.9 (tags/v3.12.9:fdb8142, Feb  4 2025, 15:27:58) [MSC v.1942 64 bit (AMD64)]",
+    "timestamp_utc": "2026-04-20T03:26:48.398938+00:00",
+    "torch": "2.5.1+cu121"
+  },
+  "script": "scripts/evaluate.py"
+}

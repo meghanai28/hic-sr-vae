@@ -8,6 +8,7 @@ tiles_k562/
 # checkpoints + tiles via scripts/reconstruct_chromosome.py).
 runs/**/*.npy
 
+key.txt
 data_sanity_check/
 
 __pycache__/

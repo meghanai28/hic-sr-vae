@@ -228,6 +228,21 @@ py scripts/loop_validation.py \
     --outdir runs/paper_full/loops_k562_chr19 --sweep
 ```
 
+### 10a. Deterministic-AE vs VAE on K562 zero-shot (Section 4.3 new table)
+
+Requires tiles_k562 from step 9 to already exist.
+
+```bash
+py scripts/evaluate.py --config configs/paper_full_k562.yaml \
+    --ckpt runs/paper_full_ae/srvae_best.pt \
+    --hicplus-ckpt runs/paper_full_hicplus/hicplus_best.pt \
+    --outdir runs/paper_full_ae/eval_k562
+```
+
+Expected summary: SR-VAE (Det-AE) MSE≈0.0012 SSIM≈0.7294 vs VAE MSE≈0.0011
+SSIM≈0.7352 — VAE is 9% lower MSE and +0.58 pp SSIM on K562 zero-shot, while
+both match to 3-4 decimal places on GM12878.
+
 ### 10. Seed variance (Table 2) and loss ablations (Table 3)
 
 ```bash
