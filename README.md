@@ -17,7 +17,7 @@ TAD-boundary recall.
 - Tile-level metrics: MSE, SSIM, GenomeDISCO, HiC-Spector
 - Biological validation: insulation-score Pearson + TAD-boundary F1 vs HR
 
-## Critical information for the paper
+## Critical information
 
 - **Data:** GM12878 Hi-C from a cooler file (`data/GM12878.mcool`) at **10 kb** resolution. Single cell line; cross-cell-line generalization is an explicit limitation.
 - **Chromosome splits:** train chr1-16, val 17-18, test 19-22.
@@ -100,7 +100,7 @@ py scripts/insulation_validation.py --mosaic-dir runs/paper_full/reconstruction 
 Outputs `{split}_chr{chrom}_insulation.csv` (Pearson of IS profile + boundary
 precision/recall/F1 vs HR) and `{split}_chr{chrom}_insulation.png`.
 
-## Experiments for the paper
+## Experiments
 
 ### A. Seed variance (report mean +/- std, paired Wilcoxon)
 
@@ -206,7 +206,7 @@ Every script writes `run_manifest.json` (CLI args, env, git state) and
 - Insulation: `*_insulation.csv`, `*_insulation.png`
 - Seed aggregation: `seed_summary.csv` + printed Wilcoxon table
 
-## Notes for the paper writeup
+## Notes
 
 - **Real 2x SR**, not same-resolution denoising (LR 128 -> HR 256 in pixel space,
   1.28 Mb -> 2.56 Mb in genomic coordinates at 10 kb).
@@ -534,69 +534,7 @@ faster than anything requiring an eigendecomposition per tile.
 > inverting the TAD-boundary trade-off and leaving HiCPlus ahead on only
 > one of three independent biological checks.
 
-## Known issues in the current runs
-
-1. **Boundary F1 for chr22 is NaN** at `min_strength=0.1` (HR caller finds 0
-   boundaries). Use the threshold sweep below or drop chr22 from the F1
-   table.
-2. **Boundary F1 under-reports SR-VAE** at a fixed threshold -- SR-VAE has
-   precision=1.0 but recall drops because its sharper output has fewer
-   shallow local minima. Use the `--sweep-strength` mode of
-   `insulation_validation.py` to report an AUPRC-style curve instead of one
-   number (see below).
-
-## What is still missing
-
-The current repo has the quantitative backbone. Anything marked with (!) is
-likely to be raised by reviewers and is worth doing before final submission.
-
-### High-impact additions
-1. ~~Cross-cell-line generalization.~~ **Done:** zero-shot K562 results in
-   "Cross-cell-line generalization (K562)" above. SR-VAE retains its fidelity
-   lead on a completely unseen cell line that is also ~8x sparser than the
-   training data. A second cell line (IMR90 or HUVEC) would turn a
-   single-transfer point into a curve.
-2. **(!) Real-replicate validation.** Replace the binomial-thinning simulated
-   LR with a genuinely shallow-sequenced replicate of the same sample
-   (4DN has matched low/high-coverage HiC data). Removes the "simulated LR
-   may be unrealistic" objection.
-3. ~~Loop-level validation.~~ **Done:** see "Loop-level biological
-   validation" above. Self-contained HiCCUPS-style donut-enrichment caller;
-   SR-VAE wins best-F1 and AUPRC on both GM12878 and K562 chr19.
-4. **Per-method boundary-caller sensitivity curve.** Sweep `min_strength`
-   from 0.0 to 0.3 and plot boundary F1 vs threshold, or report AUPRC. Fixes
-   the current "SR-VAE under-calls" story into a proper calibration result.
-5. **Architecture ablation.** Sweep `z_ch in {8, 16, 32, 64}` and
-   `base_ch in {16, 32, 64}` with a single seed each. Shows the config was
-   chosen deliberately, not tuned on test.
-
-### Medium-impact additions
-6. **Multi-resolution evaluation.** Regenerate tiles at 25 kb and 50 kb
-   resolution; show the method generalizes along the resolution axis.
-7. **Training-efficiency curve.** Loss and SSIM vs epoch, wall-clock time,
-   GPU-hours. Makes it easy for a reviewer to sanity-check that we are not
-   over-claiming about a model that is actually under-trained.
-8. **Failure-mode analysis.** Compute per-tile SR-VAE SSIM and correlate
-   with (tile sparsity, distance-from-diagonal, chromosome). Identify where
-   the method struggles and say so explicitly.
-9. **Compaction / parameter-efficiency table.** Params vs MSE vs SSIM for
-   SR-VAE, HiCPlus, HiCNN, DeepHiC, HiCSR, HiCARN (cite numbers from their
-   papers if not re-trainable here).
-
-### Nice-to-have polish
-10. **Colab / HuggingFace demo** running SR-VAE on a user-uploaded tile. High
-    signal of legitimacy for an AI4SCIENCE workshop submission.
-11. **Uncertainty visualization.** Draw N samples from the posterior and
-    show per-pixel variance; makes the "why a VAE?" question easy to
-    answer even though the AE ablation is tight.
-12. **Per-band analysis.** Split tiles by `j - i` distance and show
-    method ranking by genomic distance; far-from-diagonal tiles are the
-    hardest and most interesting.
-13. **Downstream A/B compartment calls** (PCA on normalized matrix) agreeing
-    between SR and HR. Complements loops + TADs as a third biological
-    check at a different spatial scale.
-
-## Citations to include
+## Citations
 
 - Rao et al., *A 3D map of the human genome at kilobase resolution...*, Cell 2014 (GM12878 Hi-C).
 - Zhang et al., *HiCPlus: enhancing Hi-C resolution using a deep CNN*, Nat. Commun. 2018 (baseline).
