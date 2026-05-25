@@ -5,6 +5,8 @@ apples-to-apples HiCPlus learned baseline, a tile-mosaic reconstruction pipeline
 for held-out chromosomes, and biological validation via insulation-score /
 TAD-boundary recall.
 
+[Archive ](https://www.clawrxiv.io/abs/2604.01808v2)
+
 ## Pipeline
 
 - LR tile = `binomial_thin(HR, frac=1/16) -> 2x avg-pool` (LR is half the spatial size of HR)
